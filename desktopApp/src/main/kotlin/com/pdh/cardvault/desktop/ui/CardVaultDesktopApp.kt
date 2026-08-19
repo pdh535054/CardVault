@@ -418,12 +418,17 @@ private fun CircleAction(label: String, onClick: () -> Unit) {
 @Composable
 private fun TransferScreen(controller: DesktopAppController, modifier: Modifier) {
     var pairingCodeInput by remember { mutableStateOf("") }
+    var rotationConfirmation by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(controller.concealmentEpoch) { pairingCodeInput = "" }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(42.dp)) {
         Text("离线同步", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         Text("通过微信等工具传输端到端加密文件；CardVault 本身不会联网。", color = Color.White.copy(alpha = 0.48f))
+        if (controller.syncKeyEpoch > 0L) {
+            Spacer(Modifier.height(6.dp))
+            Text("同步密钥代次：${controller.syncKeyEpoch}", color = Color.White.copy(alpha = 0.38f), fontSize = 11.sp)
+        }
         Spacer(Modifier.height(30.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
@@ -496,6 +501,42 @@ private fun TransferScreen(controller: DesktopAppController, modifier: Modifier)
             Spacer(Modifier.height(22.dp))
             Text("加密同步组件正在初始化，当前不会生成任何明文文件。", color = Color(0xFFFFD49B), fontSize = 12.sp)
         }
+
+        if (controller.syncKeyEpoch > 0L) {
+            Spacer(Modifier.height(24.dp))
+            TransferPanel(
+                "撤销旧同步关系",
+                "生成全新的同步密钥。旧同步文件将失效，其他设备必须使用新配对文件重新连接。",
+                Modifier.fillMaxWidth(),
+            ) {
+                OutlinedButton(
+                    onClick = { rotationConfirmation = true },
+                    enabled = controller.authenticatingAction == null && controller.exportDirectory != null,
+                ) { Text("轮换密钥并重新配对") }
+            }
+        }
+    }
+
+
+    if (rotationConfirmation) {
+        AlertDialog(
+            onDismissRequest = { rotationConfirmation = false },
+            title = { Text("撤销所有旧同步关系？") },
+            text = {
+                Text("银行卡、地址和已保存的 CVV 不会被删除。旧同步文件将失效，其他设备需要导入随后生成的新配对文件。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        rotationConfirmation = false
+                        scope.launch { controller.rotateSyncKeyAndExportPairing() }
+                    },
+                ) { Text("验证身份并继续") }
+            },
+            dismissButton = {
+                TextButton(onClick = { rotationConfirmation = false }) { Text("取消") }
+            },
+        )
     }
 }
 
@@ -532,7 +573,7 @@ private fun SettingsScreen(controller: DesktopAppController, modifier: Modifier)
         Spacer(Modifier.height(12.dp))
         SettingsCard("数据交换", "加密文件", "仅在你主动同步时生成或读取密文文件")
         Spacer(Modifier.height(30.dp))
-        Text("CardVault 1.3.7  ·  Windows", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp)
+        Text("CardVault 1.4.0  ·  Windows", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp)
         Text(
             "本地数据目录：${EncryptedDesktopVault.defaultDirectory()}",
             color = Color.White.copy(alpha = 0.22f),

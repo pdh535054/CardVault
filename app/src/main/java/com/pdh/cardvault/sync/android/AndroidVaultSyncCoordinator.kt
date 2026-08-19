@@ -137,44 +137,54 @@ internal class AndroidVaultSyncCoordinator(
     suspend fun createPairingExport(
         validityMillis: Long = DEFAULT_PAIRING_VALIDITY_MILLIS,
     ): PairingExport = operationMutex.withLock {
-        require(validityMillis in 1L..MAX_PAIRING_VALIDITY_MILLIS) {
-            "Invalid pairing validity."
-        }
+        requirePairingValidity(validityMillis)
         repository.withUnlockedDekForSync { localDek ->
             val syncKey = getOrCreateSyncKey(localDek)
             try {
-                val exportedAt = now()
-                val expiresAt = safeAdd(exportedAt, validityMillis)
-                val state = syncStateDao.nextExportSequence(exportedAt)
-                val snapshot = buildLocalSnapshot(localDek)
-                PairingCode.generate().use { pairing ->
-                    val pairingSecret = pairing.secret.copyBytes()
-                    val payloadSecret = SecretBytes(syncKey)
-                    try {
-                        val payload = PairingFilePayload(
-                            packageId = UUID.randomUUID().toString(),
-                            vaultId = state.vaultId,
-                            sourceDeviceId = state.deviceId,
-                            exportSequence = state.exportSequence,
-                            exportedAtEpochMillis = exportedAt,
-                            expiresAtEpochMillis = expiresAt,
-                            keyEpoch = state.keyEpoch,
-                            syncSecret = payloadSecret,
-                            snapshot = snapshot,
-                        )
-                        PairingExport(
-                            fileName = "CardVault-pair-" + state.exportSequence + "." +
-                                CardVaultSyncFiles.PAIRING_EXTENSION,
-                            displayCode = pairing.displayCode,
-                            fileBytes = CardVaultSyncFiles.encodePairing(payload, pairingSecret),
-                        )
-                    } finally {
-                        payloadSecret.close()
-                        pairingSecret.fill(0)
-                    }
-                }
+                createPairingExport(localDek, syncKey, validityMillis)
             } finally {
                 syncKey.fill(0)
+            }
+        }
+    }
+
+    /**
+     * Revokes the current synchronization relationship, advances the key epoch, and returns a
+     * fresh pairing package. Card/address ciphertext and saved CVV values are not modified.
+     */
+    suspend fun rotateSyncKeyAndCreatePairingExport(
+        validityMillis: Long = DEFAULT_PAIRING_VALIDITY_MILLIS,
+    ): PairingExport = operationMutex.withLock {
+        requirePairingValidity(validityMillis)
+        repository.withUnlockedDekForSync { localDek ->
+            val current = requirePairedState()
+            if (current.keyEpoch == Int.MAX_VALUE) throw DatabaseInvariantException()
+            CardVaultSyncFiles.generateSyncSecret().use { generated ->
+                val newSyncKey = generated.copyBytes()
+                try {
+                    val encrypted = syncKeyCryptor.encrypt(
+                        syncKey = newSyncKey,
+                        localDek = localDek,
+                        vaultId = current.vaultId,
+                        keyEpoch = current.keyEpoch + 1,
+                    )
+                    val ciphertext = encrypted.ciphertextCopy()
+                    try {
+                        syncStateDao.rotateSyncKey(
+                            expectedVaultId = current.vaultId,
+                            expectedKeyEpoch = current.keyEpoch,
+                            encryptedSyncKey = ciphertext,
+                            syncKeyIv = encrypted.ivCopy(),
+                            syncKeyCryptoVersion = encrypted.cryptoVersion,
+                            proposedUpdatedAt = now(),
+                        )
+                    } finally {
+                        ciphertext.fill(0)
+                    }
+                    createPairingExport(localDek, newSyncKey, validityMillis)
+                } finally {
+                    newSyncKey.fill(0)
+                }
             }
         }
     }
@@ -219,6 +229,7 @@ internal class AndroidVaultSyncCoordinator(
                         descriptor = ReplayProtector.descriptor(payload),
                         state = requireVaultState(),
                         allowUnpairedVaultChange = true,
+                        allowNewerKeyEpoch = true,
                     )
                     payload.snapshot.toSummary(
                         pairing = true,
@@ -267,6 +278,7 @@ internal class AndroidVaultSyncCoordinator(
                         descriptor = ReplayProtector.descriptor(payload),
                         state = currentState,
                         allowUnpairedVaultChange = true,
+                        allowNewerKeyEpoch = true,
                     )
                     val merged = SnapshotMerger.merge(
                         local = buildLocalSnapshot(localDek),
@@ -374,6 +386,43 @@ internal class AndroidVaultSyncCoordinator(
                 }
             } finally {
                 syncKey.fill(0)
+            }
+        }
+    }
+
+    private suspend fun createPairingExport(
+        localDek: ByteArray,
+        syncKey: ByteArray,
+        validityMillis: Long,
+    ): PairingExport {
+        val exportedAt = now()
+        val expiresAt = safeAdd(exportedAt, validityMillis)
+        val state = syncStateDao.nextExportSequence(exportedAt)
+        val snapshot = buildLocalSnapshot(localDek)
+        PairingCode.generate().use { pairing ->
+            val pairingSecret = pairing.secret.copyBytes()
+            val payloadSecret = SecretBytes(syncKey)
+            try {
+                val payload = PairingFilePayload(
+                    packageId = UUID.randomUUID().toString(),
+                    vaultId = state.vaultId,
+                    sourceDeviceId = state.deviceId,
+                    exportSequence = state.exportSequence,
+                    exportedAtEpochMillis = exportedAt,
+                    expiresAtEpochMillis = expiresAt,
+                    keyEpoch = state.keyEpoch,
+                    syncSecret = payloadSecret,
+                    snapshot = snapshot,
+                )
+                return PairingExport(
+                    fileName = "CardVault-pair-" + state.exportSequence + "." +
+                        CardVaultSyncFiles.PAIRING_EXTENSION,
+                    displayCode = pairing.displayCode,
+                    fileBytes = CardVaultSyncFiles.encodePairing(payload, pairingSecret),
+                )
+            } finally {
+                payloadSecret.close()
+                pairingSecret.fill(0)
             }
         }
     }
@@ -551,11 +600,15 @@ internal class AndroidVaultSyncCoordinator(
         descriptor: com.pdh.cardvault.sync.SyncPackageDescriptor,
         state: SyncVaultStateEntity,
         allowUnpairedVaultChange: Boolean,
+        allowNewerKeyEpoch: Boolean = false,
     ) {
         if (descriptor.sourceDeviceId == state.deviceId) {
             throw SyncProtocolException(SyncErrorCode.REPLAYED_PACKAGE)
         }
         val paired = state.encryptedSyncKey != null && state.syncKeyIv != null
+        if (paired && allowNewerKeyEpoch && descriptor.keyEpoch < state.keyEpoch) {
+            throw SyncProtocolException(SyncErrorCode.STALE_PACKAGE)
+        }
         val recent = syncStateDao.getRecentImportedPackages()
         val highest = syncStateDao.maxImportedSequence(descriptor.sourceDeviceId)
         ReplayProtector.accept(
@@ -567,8 +620,17 @@ internal class AndroidVaultSyncCoordinator(
             ),
             descriptor = descriptor,
             expectedVaultId = state.vaultId.takeIf { paired || !allowUnpairedVaultChange },
-            expectedKeyEpoch = state.keyEpoch.takeIf { paired || !allowUnpairedVaultChange },
+            expectedKeyEpoch = state.keyEpoch.takeIf {
+                (paired || !allowUnpairedVaultChange) &&
+                    !(allowNewerKeyEpoch && paired && descriptor.keyEpoch > state.keyEpoch)
+            },
         )
+    }
+
+    private fun requirePairingValidity(validityMillis: Long) {
+        require(validityMillis in 1L..MAX_PAIRING_VALIDITY_MILLIS) {
+            "Invalid pairing validity."
+        }
     }
 
     private fun decryptStoredSyncKey(

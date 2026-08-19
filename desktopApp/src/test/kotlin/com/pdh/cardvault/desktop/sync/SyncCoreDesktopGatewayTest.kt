@@ -15,6 +15,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -77,6 +78,27 @@ class SyncCoreDesktopGatewayTest {
         }
 
         assertEquals(listOf(retainedAddress), imported.snapshot.addresses)
+    }
+
+    @Test
+    fun `rotating the sync key preserves vault data and rejects old sync packages`() {
+        val gateway = SyncCoreDesktopGateway(clock, SecureRandom())
+        val initialPairing = gateway.export(snapshotWithCard(), newPairing = true)
+        val pairedSnapshot = initialPairing.snapshotAfterExport
+        initialPairing.bytes.fill(0)
+        val oldSync = gateway.export(pairedSnapshot, newPairing = false)
+        val rotated = gateway.rotateSyncKey(oldSync.snapshotAfterExport)
+
+        assertEquals(2L, rotated.syncState.keyEpoch)
+        assertEquals(oldSync.snapshotAfterExport.cards, rotated.cards)
+        assertEquals(oldSync.snapshotAfterExport.addresses, rotated.addresses)
+        try {
+            assertFailsWith<DesktopSyncException> {
+                gateway.import(oldSync.bytes, null, rotated)
+            }
+        } finally {
+            oldSync.bytes.fill(0)
+        }
     }
 
     private fun snapshotWithCard(): DesktopVaultSnapshot {

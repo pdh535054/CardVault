@@ -11,6 +11,7 @@ enum class AuthenticationAction {
     DeleteCard,
     ExportVault,
     ImportVault,
+    RotateSyncKey,
     ;
 
     val requiresRecordId: Boolean
@@ -25,11 +26,12 @@ enum class AuthenticationAction {
             UnlockVault,
             ExportVault,
             ImportVault,
+            RotateSyncKey,
             -> false
         }
 
     val isVaultTransferAction: Boolean
-        get() = this == ExportVault || this == ImportVault
+        get() = this == ExportVault || this == ImportVault || this == RotateSyncKey
 }
 
 data class AuthenticationScope(

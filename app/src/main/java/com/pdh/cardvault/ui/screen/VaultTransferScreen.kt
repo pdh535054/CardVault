@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -24,7 +25,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -48,12 +54,14 @@ fun VaultTransferScreen(
     onBack: () -> Unit,
     onPrepareExport: () -> Unit,
     onPrepareNewDevicePairing: () -> Unit,
+    onRotateSyncKey: () -> Unit,
     onSharePreparedExport: () -> Unit,
     onImportUriSelected: (String) -> Unit,
     onPairingCodeChanged: (String) -> Unit,
     onConfirmPairingImport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showRotationConfirmation by remember { mutableStateOf(false) }
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri -> if (uri != null) onImportUriSelected(uri.toString()) },
@@ -87,6 +95,17 @@ fun VaultTransferScreen(
                         stringResource(R.string.vault_transfer_status_unpaired)
                     },
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (state.pairingState == VaultPairingState.Paired) {
+                Text(
+                    text = stringResource(
+                        R.string.vault_transfer_key_epoch,
+                        state.keyEpoch ?: 0,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -245,6 +264,22 @@ fun VaultTransferScreen(
                 }
             }
 
+            if (state.pairingState == VaultPairingState.Paired) {
+                TransferActionCard(
+                    eyebrow = stringResource(R.string.vault_transfer_security_eyebrow),
+                    title = stringResource(R.string.vault_transfer_rotate_title),
+                    description = stringResource(R.string.vault_transfer_rotate_description),
+                ) {
+                    OutlinedButton(
+                        onClick = { showRotationConfirmation = true },
+                        enabled = !state.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.vault_transfer_rotate_action))
+                    }
+                }
+            }
+
             state.message?.let { message ->
                 val colors = when (message.kind) {
                     VaultTransferMessageKind.Success ->
@@ -290,6 +325,30 @@ fun VaultTransferScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+
+
+    if (showRotationConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showRotationConfirmation = false },
+            title = { Text(stringResource(R.string.vault_transfer_rotate_confirm_title)) },
+            text = { Text(stringResource(R.string.vault_transfer_rotate_confirm_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRotationConfirmation = false
+                        onRotateSyncKey()
+                    },
+                ) {
+                    Text(stringResource(R.string.vault_transfer_rotate_confirm_action))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRotationConfirmation = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }
 

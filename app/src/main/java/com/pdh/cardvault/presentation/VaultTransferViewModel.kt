@@ -29,6 +29,7 @@ import kotlinx.coroutines.launch
 internal interface VaultSyncOperations {
     suspend fun pairingStatus(): SyncPairingStatus
     suspend fun createPairingExport(): PairingExport
+    suspend fun rotateSyncKeyAndCreatePairingExport(): PairingExport
     suspend fun exportSync(): SyncExport
     suspend fun importPairing(bytes: ByteArray, displayCode: String): SyncImportResult
     suspend fun importSync(bytes: ByteArray): SyncImportResult
@@ -39,6 +40,8 @@ internal class CoordinatorVaultSyncOperations(
 ) : VaultSyncOperations {
     override suspend fun pairingStatus(): SyncPairingStatus = coordinator.pairingStatus()
     override suspend fun createPairingExport(): PairingExport = coordinator.createPairingExport()
+    override suspend fun rotateSyncKeyAndCreatePairingExport(): PairingExport =
+        coordinator.rotateSyncKeyAndCreatePairingExport()
     override suspend fun exportSync(): SyncExport = coordinator.exportSync()
     override suspend fun importPairing(bytes: ByteArray, displayCode: String): SyncImportResult =
         coordinator.importPairing(bytes, displayCode)
@@ -114,6 +117,7 @@ class VaultTransferViewModel internal constructor(
                 _uiState.update { current ->
                     current.copy(
                         pairingState = status.toUiPairingState(),
+                        keyEpoch = status.keyEpoch,
                         message = current.message,
                     )
                 }
@@ -165,6 +169,14 @@ class VaultTransferViewModel internal constructor(
 
     fun requestNewDevicePairing() {
         requestExport(ExportMode.Pairing)
+    }
+
+    fun requestSyncKeyRotation() {
+        if (_uiState.value.pairingState != VaultPairingState.Paired) return
+        if (_uiState.value.busy || pendingAuthentication != null) return
+        clearPreparedExport()
+        pendingExportMode = ExportMode.Rotation
+        queueAuthentication(AuthenticationAction.RotateSyncKey)
     }
 
     fun onImportUriSelected(uri: String) {
@@ -299,6 +311,10 @@ class VaultTransferViewModel internal constructor(
                         mode = exportMode ?: ExportMode.Automatic,
                     )
                     AuthenticationAction.ImportVault -> performImport(expectedGeneration)
+                    AuthenticationAction.RotateSyncKey -> performExport(
+                        expectedGeneration = expectedGeneration,
+                        mode = ExportMode.Rotation,
+                    )
                     else -> error("Unexpected vault transfer action.")
                 }
             } catch (exception: CancellationException) {
@@ -348,7 +364,12 @@ class VaultTransferViewModel internal constructor(
         try {
             val fileName: String
             val pairingCode: String?
-            if (status.isPaired && mode != ExportMode.Pairing) {
+            if (mode == ExportMode.Rotation) {
+                val exported = operations.rotateSyncKeyAndCreatePairingExport()
+                fileBytes = exported.fileBytesCopy()
+                fileName = exported.fileName
+                pairingCode = exported.displayCode
+            } else if (status.isPaired && mode != ExportMode.Pairing) {
                 val exported = operations.exportSync()
                 fileBytes = exported.fileBytesCopy()
                 fileName = exported.fileName
@@ -361,15 +382,21 @@ class VaultTransferViewModel internal constructor(
             }
             val shared = files.publish(fileName, requireNotNull(fileBytes))
             if (expectedGeneration != lifecycleGeneration) return
+            val statusAfter = operations.pairingStatus()
             preparedFile = shared
             _uiState.update { current ->
                 current.copy(
                     pairingState = VaultPairingState.Paired,
+                    keyEpoch = statusAfter.keyEpoch,
                     busy = false,
                     preparedFileName = fileName,
                     pairingCode = pairingCode,
                     message = VaultTransferMessage(
-                        text = "加密文件已准备好",
+                        text = if (mode == ExportMode.Rotation) {
+                            "旧同步关系已撤销；请用新配对文件重新连接其他设备"
+                        } else {
+                            "加密文件已准备好"
+                        },
                         kind = VaultTransferMessageKind.Success,
                     ),
                 )
@@ -450,6 +477,7 @@ class VaultTransferViewModel internal constructor(
     private fun clearPendingOperation(action: AuthenticationAction) {
         when (action) {
             AuthenticationAction.ExportVault -> pendingExportMode = null
+            AuthenticationAction.RotateSyncKey -> pendingExportMode = null
             AuthenticationAction.ImportVault -> {
                 clearPendingImport()
                 _uiState.update { current ->
@@ -534,5 +562,6 @@ class VaultTransferViewModel internal constructor(
     private enum class ExportMode {
         Automatic,
         Pairing,
+        Rotation,
     }
 }

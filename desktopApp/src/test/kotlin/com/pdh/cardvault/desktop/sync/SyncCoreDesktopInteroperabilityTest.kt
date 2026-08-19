@@ -44,12 +44,44 @@ class SyncCoreDesktopInteroperabilityTest {
     }
 
     @Test
-    fun `an already paired desktop rejects a pairing package from another key epoch`() {
+    fun `an already paired desktop accepts a pairing package from a newer key epoch`() {
         val vaultId = "10000000-0000-4000-8000-000000000077"
         val sourceDevice = "00000000-0000-4000-8000-000000000077"
         val targetDevice = "00000000-0000-4000-8000-000000000078"
         val sourceState = pairedState(vaultId, sourceDevice, keyEpoch = 2, keyByte = 0x22)
         val targetState = pairedState(vaultId, targetDevice, keyEpoch = 1, keyByte = 0x11)
+        val pairing = SyncCoreDesktopGateway(clock, SecureRandom()).export(
+            DesktopVaultSnapshot(emptyList(), 0, sourceState),
+            newPairing = true,
+        )
+
+        try {
+            val imported = SyncCoreDesktopGateway(clock, SecureRandom()).import(
+                pairing.bytes,
+                assertNotNull(pairing.pairingCode),
+                DesktopVaultSnapshot(emptyList(), 0, targetState),
+            )
+            assertEquals(2L, imported.snapshot.syncState.keyEpoch)
+        } finally {
+            pairing.bytes.fill(0)
+        }
+    }
+
+    @Test
+    fun `an already paired desktop rejects a pairing package from an older key epoch`() {
+        val vaultId = "10000000-0000-4000-8000-000000000079"
+        val sourceState = pairedState(
+            vaultId,
+            "00000000-0000-4000-8000-000000000079",
+            keyEpoch = 1,
+            keyByte = 0x11,
+        )
+        val targetState = pairedState(
+            vaultId,
+            "00000000-0000-4000-8000-000000000080",
+            keyEpoch = 2,
+            keyByte = 0x22,
+        )
         val pairing = SyncCoreDesktopGateway(clock, SecureRandom()).export(
             DesktopVaultSnapshot(emptyList(), 0, sourceState),
             newPairing = true,

@@ -66,6 +66,26 @@ class VaultTransferViewModelTest {
     }
 
     @Test
+    fun keyRotationRequiresDedicatedAuthenticationAndPublishesFreshPairingFile() {
+        val fixture = fixture(paired = true)
+        fixture.viewModel.onVaultAccessAllowed()
+
+        fixture.viewModel.requestSyncKeyRotation()
+
+        assertEquals(
+            AuthenticationAction.RotateSyncKey,
+            fixture.viewModel.pendingAuthenticationAction(),
+        )
+        assertEquals(0, fixture.operations.rotationCount)
+        authorize(fixture.viewModel, AuthenticationAction.RotateSyncKey)
+        assertEquals(1, fixture.operations.rotationCount)
+        assertEquals(2, fixture.viewModel.uiState.value.keyEpoch)
+        assertEquals("CardVault-pair-rotated.cvpair", fixture.viewModel.uiState.value.preparedFileName)
+        assertEquals(FakeOperations.PAIRING_CODE, fixture.viewModel.uiState.value.pairingCode)
+        assertTrue(requireNotNull(fixture.files.publishedBytes).all { it == 0.toByte() })
+    }
+
+    @Test
     fun pairingImportRequiresCodeAndAuthenticationThenClearsAllTransientSecrets() {
         val fixture = fixture(readBytes = encodedPairingFile())
 
@@ -305,17 +325,19 @@ class VaultTransferViewModelTest {
 }
 
 private class FakeOperations(
-    private val paired: Boolean,
+    paired: Boolean,
 ) : VaultSyncOperations {
+    private var currentEpoch: Int? = 1.takeIf { paired }
     var pairingExportCount = 0
     var syncExportCount = 0
     var pairingImportCount = 0
     var syncImportCount = 0
+    var rotationCount = 0
     var pairingImportFailure: Exception? = null
 
     override suspend fun pairingStatus(): SyncPairingStatus = SyncPairingStatus(
-        isPaired = paired,
-        keyEpoch = 1.takeIf { paired },
+        isPaired = currentEpoch != null,
+        keyEpoch = currentEpoch,
     )
 
     override suspend fun createPairingExport(): PairingExport {
@@ -324,6 +346,16 @@ private class FakeOperations(
             fileName = "CardVault-pair-1.cvpair",
             displayCode = PAIRING_CODE,
             fileBytes = byteArrayOf(11, 12, 13),
+        )
+    }
+
+    override suspend fun rotateSyncKeyAndCreatePairingExport(): PairingExport {
+        rotationCount += 1
+        currentEpoch = requireNotNull(currentEpoch) + 1
+        return PairingExport(
+            fileName = "CardVault-pair-rotated.cvpair",
+            displayCode = PAIRING_CODE,
+            fileBytes = byteArrayOf(31, 32, 33),
         )
     }
 

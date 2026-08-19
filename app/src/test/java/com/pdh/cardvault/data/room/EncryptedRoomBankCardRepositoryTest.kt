@@ -486,6 +486,52 @@ class EncryptedRoomBankCardRepositoryTest {
     }
 
     @Test
+    fun rotatingSyncKeyPreservesSavedCvvRejectsOldSyncAndAllowsNewPairing() = runBlocking {
+        val phone = fixture()
+        val desktop = fixture()
+        phone.repository.unlockOrCreateVault()
+        desktop.repository.unlockOrCreateVault()
+        val syntheticCvv = "9".repeat(3)
+        val cardId = phone.repository.add(
+            validInput(
+                nickname = "Synthetic rotation card",
+                saveCvv = true,
+                cvv = syntheticCvv,
+            ),
+        )
+        val phoneCoordinator = coordinator(phone)
+        val desktopCoordinator = coordinator(desktop)
+        val initialPairing = phoneCoordinator.createPairingExport()
+        desktopCoordinator.importPairing(initialPairing.fileBytesCopy(), initialPairing.displayCode)
+        val oldSync = desktopCoordinator.exportSync().fileBytesCopy()
+
+        val rotatedPairing = phoneCoordinator.rotateSyncKeyAndCreatePairingExport()
+
+        assertEquals(2, phoneCoordinator.pairingStatus().keyEpoch)
+        assertEquals(
+            syntheticCvv,
+            phone.repository.getSecretsForAuthenticatedUse(cardId)?.cvv,
+        )
+        val oldImportFailure = runCatching { phoneCoordinator.importSync(oldSync) }.exceptionOrNull()
+        assertTrue(oldImportFailure is com.pdh.cardvault.sync.SyncProtocolException)
+        assertEquals(
+            com.pdh.cardvault.sync.SyncErrorCode.AUTHENTICATION_FAILED,
+            (oldImportFailure as com.pdh.cardvault.sync.SyncProtocolException).code,
+        )
+
+        desktopCoordinator.importPairing(
+            rotatedPairing.fileBytesCopy(),
+            rotatedPairing.displayCode,
+        )
+        assertEquals(2, desktopCoordinator.pairingStatus().keyEpoch)
+        assertEquals(
+            syntheticCvv,
+            desktop.repository.getSecretsForAuthenticatedUse(cardId)?.cvv,
+        )
+        oldSync.fill(0)
+    }
+
+    @Test
     fun legacyCardOnlyPairingFileDoesNotEraseLocalAddresses() = runBlocking {
         val source = fixture()
         val target = fixture()

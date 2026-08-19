@@ -16,7 +16,7 @@ plugins {
 }
 
 group = "com.pdh.cardvault"
-version = "1.3.7"
+version = "1.4.0"
 
 val generatedWindowsIcon = layout.buildDirectory.file("generated/cardvault/cardvault.ico")
 val generateWindowsIcon = tasks.register("generateWindowsIcon") {
@@ -88,7 +88,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi)
             packageName = "CardVault"
-            packageVersion = "1.3.7"
+            packageVersion = "1.4.0"
             description = "CardVault offline encrypted card and address wallet"
             vendor = "pdh"
             windows {

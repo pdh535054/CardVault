@@ -8,6 +8,9 @@ interface DesktopSyncGateway {
 
     fun export(snapshot: DesktopVaultSnapshot, newPairing: Boolean): DesktopExportPackage
 
+    /** Replaces the shared key and advances its epoch without changing vault records. */
+    fun rotateSyncKey(snapshot: DesktopVaultSnapshot): DesktopVaultSnapshot
+
     fun import(bytes: ByteArray, pairingCode: String?, current: DesktopVaultSnapshot): DesktopImportResult
 }
 

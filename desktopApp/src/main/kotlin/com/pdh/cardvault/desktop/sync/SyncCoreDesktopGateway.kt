@@ -42,6 +42,27 @@ class SyncCoreDesktopGateway(
         return if (newPairing) exportPairing(snapshot) else exportSync(snapshot)
     }
 
+    override fun rotateSyncKey(snapshot: DesktopVaultSnapshot): DesktopVaultSnapshot {
+        val state = snapshot.syncState
+        if (state.sharedSyncKey == null || state.keyEpoch !in 1 until Int.MAX_VALUE.toLong()) {
+            throw IllegalStateException("请先完成设备配对。")
+        }
+        CardVaultSyncFiles.generateSyncSecret(random).use { generated ->
+            val newKey = generated.copyBytes()
+            return try {
+                snapshot.copy(
+                    syncState = state.copy(
+                        keyEpoch = state.keyEpoch + 1L,
+                        sharedSyncKey = DesktopSecret.of(newKey),
+                    ),
+                    revision = snapshot.revision + 1L,
+                )
+            } finally {
+                newKey.fill(0)
+            }
+        }
+    }
+
     override fun import(
         bytes: ByteArray,
         pairingCode: String?,
@@ -163,11 +184,18 @@ class SyncCoreDesktopGateway(
         if (currentState.sharedSyncKey != null && currentState.vaultId != payload.vaultId) {
             throw DesktopSyncException(SyncErrorCode.VAULT_MISMATCH)
         }
+        if (currentState.sharedSyncKey != null && payload.keyEpoch < currentState.keyEpoch) {
+            throw DesktopSyncException(SyncErrorCode.STALE_PACKAGE)
+        }
+        val acceptsNewerKeyEpoch = currentState.sharedSyncKey != null &&
+            payload.keyEpoch > currentState.keyEpoch
         val replay = ReplayProtector.accept(
             metadata = currentState.toReplayMetadata(),
             descriptor = ReplayProtector.descriptor(payload),
             expectedVaultId = currentState.vaultId.takeIf { currentState.sharedSyncKey != null },
-            expectedKeyEpoch = currentState.keyEpoch.toInt().takeIf { currentState.sharedSyncKey != null },
+            expectedKeyEpoch = currentState.keyEpoch.toInt().takeIf {
+                currentState.sharedSyncKey != null && !acceptsNewerKeyEpoch
+            },
         )
         val merged = SnapshotMerger.merge(current.toCoreSnapshot(), payload.snapshot, currentState.deviceId)
         val sharedKey = payload.syncSecret.copyBytes()

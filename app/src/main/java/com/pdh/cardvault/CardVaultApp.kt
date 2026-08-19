@@ -335,6 +335,8 @@ fun CardVaultApp(
                         onPrepareVaultExport = vaultTransferViewModel::requestExport,
                         onPrepareNewDevicePairing =
                             vaultTransferViewModel::requestNewDevicePairing,
+                        onRotateVaultSyncKey =
+                            vaultTransferViewModel::requestSyncKeyRotation,
                         onSharePreparedVaultExport = {
                             val shareIntent = vaultTransferViewModel.preparedShareIntent()
                             if (shareIntent != null) {

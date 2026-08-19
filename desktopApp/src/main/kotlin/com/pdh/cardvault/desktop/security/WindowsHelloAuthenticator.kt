@@ -17,6 +17,7 @@ enum class SensitiveAction(val prompt: String) {
     DeleteAddress("请验证身份以删除地址"),
     ExportVault("请验证身份以导出 CardVault 加密文件"),
     ImportVault("请验证身份以导入 CardVault 加密文件"),
+    RotateSyncKey("请验证身份以撤销旧同步关系并生成新密钥"),
 }
 
 fun interface SensitiveActionAuthenticator {

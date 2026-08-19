@@ -170,6 +170,14 @@
     <string name="vault_transfer_secure_processing">正在安全处理</string>
     <string name="vault_transfer_encryption_note">文件经过 AES-256-GCM 加密。CardVault 不联网，微信、QQ 或其他应用只负责传送密文。</string>
     <string name="vault_transfer_share_chooser_title">分享加密同步文件</string>
+    <string name="vault_transfer_key_epoch">同步密钥代次：%1$d</string>
+    <string name="vault_transfer_security_eyebrow">安全</string>
+    <string name="vault_transfer_rotate_title">撤销旧同步关系</string>
+    <string name="vault_transfer_rotate_description">生成全新的同步密钥。旧同步文件将无法在本设备导入，其他设备需要使用新配对文件重新连接。</string>
+    <string name="vault_transfer_rotate_action">轮换密钥并重新配对</string>
+    <string name="vault_transfer_rotate_confirm_title">撤销所有旧同步关系？</string>
+    <string name="vault_transfer_rotate_confirm_body">银行卡、地址和已保存的 CVV 不会被删除。旧同步文件将失效，其他设备必须导入随后生成的新配对文件。</string>
+    <string name="vault_transfer_rotate_confirm_action">验证身份并继续</string>
     <string name="template_gallery_title">卡面设计</string>
     <string name="card_flip_to_back">轻点查看卡片背面</string>
     <string name="card_flip_to_front">轻点返回卡片正面</string>

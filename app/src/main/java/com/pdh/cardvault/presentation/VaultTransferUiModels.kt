@@ -31,6 +31,7 @@ data class VaultTransferAuthenticationRequest(
 
 data class VaultTransferUiState(
     val pairingState: VaultPairingState = VaultPairingState.Unpaired,
+    val keyEpoch: Int? = null,
     val busy: Boolean = false,
     val preparedFileName: String? = null,
     val pairingCode: String? = null,
@@ -41,5 +42,6 @@ data class VaultTransferUiState(
     val importedSnapshotRevision: Long = 0L,
 ) {
     override fun toString(): String =
-        "VaultTransferUiState(pairing=$pairingState, busy=$busy, transferSecrets=redacted)"
+        "VaultTransferUiState(pairing=$pairingState, keyEpoch=$keyEpoch, " +
+            "busy=$busy, transferSecrets=redacted)"
 }

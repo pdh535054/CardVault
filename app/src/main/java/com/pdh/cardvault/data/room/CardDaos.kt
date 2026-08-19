@@ -607,6 +607,46 @@ internal abstract class SyncStateDao {
         return updated
     }
 
+    /**
+     * Replaces the shared synchronization key without touching cards, addresses, or their
+     * encrypted payloads. Advancing [keyEpoch] makes every package encrypted with an older key
+     * unusable on this installation.
+     */
+    @Transaction
+    open suspend fun rotateSyncKey(
+        expectedVaultId: String,
+        expectedKeyEpoch: Int,
+        encryptedSyncKey: ByteArray,
+        syncKeyIv: ByteArray,
+        syncKeyCryptoVersion: Int,
+        proposedUpdatedAt: Long,
+    ): SyncVaultStateEntity {
+        val state = getVaultState() ?: throw DatabaseInvariantException()
+        if (
+            state.vaultId != expectedVaultId ||
+            state.keyEpoch != expectedKeyEpoch ||
+            state.encryptedSyncKey == null ||
+            state.syncKeyIv == null ||
+            expectedKeyEpoch <= 0 ||
+            expectedKeyEpoch == Int.MAX_VALUE ||
+            encryptedSyncKey.isEmpty() ||
+            syncKeyIv.isEmpty() ||
+            syncKeyCryptoVersion <= 0 ||
+            state.updatedAt == Long.MAX_VALUE
+        ) {
+            throw DatabaseInvariantException()
+        }
+        val updated = state.copy(
+            keyEpoch = expectedKeyEpoch + 1,
+            encryptedSyncKey = encryptedSyncKey.copyOf(),
+            syncKeyIv = syncKeyIv.copyOf(),
+            syncKeyCryptoVersion = syncKeyCryptoVersion,
+            updatedAt = maxOf(proposedUpdatedAt.coerceAtLeast(0L), state.updatedAt + 1L),
+        )
+        replaceVaultState(updated)
+        return updated
+    }
+
     @Transaction
     open suspend fun replaceSnapshotAtomically(
         cards: List<CardEntity>,

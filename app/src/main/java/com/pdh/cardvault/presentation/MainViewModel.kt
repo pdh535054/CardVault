@@ -299,6 +299,7 @@ class MainViewModel internal constructor(
             AuthenticationAction.DeleteCard,
             AuthenticationAction.ExportVault,
             AuthenticationAction.ImportVault,
+            AuthenticationAction.RotateSyncKey,
             -> oneTimeAuthorization = request.scope
 
             AuthenticationAction.UnlockVault -> Unit

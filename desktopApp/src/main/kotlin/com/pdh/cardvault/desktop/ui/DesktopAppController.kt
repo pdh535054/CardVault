@@ -101,6 +101,12 @@ class DesktopAppController(
         private set
     var pairingCode by mutableStateOf<String?>(null)
         private set
+    var syncKeyEpoch by mutableLongStateOf(
+        repository.snapshot().syncState.keyEpoch.takeIf {
+            repository.snapshot().syncState.sharedSyncKey != null
+        } ?: 0L,
+    )
+        private set
     var exportDirectory by mutableStateOf(loadExportDirectory())
         private set
     var concealmentEpoch by mutableLongStateOf(0L)
@@ -353,6 +359,7 @@ class DesktopAppController(
                 // Persist the consumed sequence before exposing the file. A failed write may leave
                 // a harmless sequence gap, but a crash can never cause nonce/sequence reuse.
                 repository.replaceSnapshot(exported.snapshotAfterExport)
+                refreshSyncStatus()
                 val path = DesktopTransferFiles.writeExport(directory, exported)
                 pairingCode = exported.pairingCode
                 notice = "已安全导出到 ${path.fileName}"
@@ -362,6 +369,35 @@ class DesktopAppController(
             true
         }.onFailure {
             notice = it.message ?: "导出失败"
+        }.getOrDefault(false)
+    }
+
+    suspend fun rotateSyncKeyAndExportPairing(): Boolean {
+        val directory = exportDirectory?.let(Path::of)
+        if (directory == null) {
+            notice = "请先选择导出位置"
+            return false
+        }
+        if (!authenticate(SensitiveAction.RotateSyncKey)) return false
+        return runCatching {
+            // Persist the replacement key before producing any package. If file creation fails,
+            // old packages are still revoked and the user can create a fresh pairing file later.
+            val rotated = syncGateway.rotateSyncKey(repository.snapshot())
+            repository.replaceSnapshot(rotated)
+            refreshSyncStatus()
+            val exported = syncGateway.export(repository.snapshot(), newPairing = true)
+            try {
+                repository.replaceSnapshot(exported.snapshotAfterExport)
+                refreshSyncStatus()
+                val path = DesktopTransferFiles.writeExport(directory, exported)
+                pairingCode = exported.pairingCode
+                notice = "旧同步关系已撤销；新配对文件已保存到 ${path.fileName}"
+            } finally {
+                exported.bytes.fill(0)
+            }
+            true
+        }.onFailure {
+            notice = it.message ?: "同步密钥轮换失败"
         }.getOrDefault(false)
     }
 
@@ -379,6 +415,7 @@ class DesktopAppController(
                 repository.snapshot(),
             )
             repository.replaceSnapshot(result.snapshot)
+            refreshSyncStatus()
             refreshCards()
             refreshAddresses()
             selectedId = cards.firstOrNull()?.id
@@ -466,6 +503,11 @@ class DesktopAppController(
 
     private fun refreshAddresses() {
         addresses = repository.addresses()
+    }
+
+    private fun refreshSyncStatus() {
+        val state = repository.snapshot().syncState
+        syncKeyEpoch = state.keyEpoch.takeIf { state.sharedSyncKey != null } ?: 0L
     }
 
     private fun isValidExpiry(digits: String): Boolean =
