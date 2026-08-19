@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CardVault</string>
+
+    <string name="action_back">返回</string>
+    <string name="action_understand_and_continue">我已了解，继续</string>
+    <string name="action_add_card">添加银行卡</string>
+    <string name="action_add_address">添加地址</string>
+    <string name="action_save_card">保存</string>
+    <string name="action_save_changes">保存修改</string>
+    <string name="action_saving">保存中…</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_open_card_detail">打开银行卡详情</string>
+    <string name="action_browse_templates">设计卡面</string>
+    <string name="action_move_up">上移</string>
+    <string name="action_move_down">下移</string>
+    <string name="action_open_address_detail">打开地址详情</string>
+    <string name="action_reveal_card_secrets">验证并显示卡片信息</string>
+    <string name="action_hide_card_secrets">立即隐藏卡片信息</string>
+    <string name="action_copy_revealed_card_number">复制卡号</string>
+    <string name="action_edit_card">编辑</string>
+    <string name="action_delete_card">删除</string>
+    <string name="action_delete_permanently">永久删除</string>
+    <string name="action_unlock">使用系统身份认证解锁</string>
+    <string name="action_open_security_settings">打开系统安全设置</string>
+    <string name="action_retry">重新检查</string>
+    <string name="security_notice_heading">在继续之前</string>
+    <string name="security_notice_storage_status">银行卡和地址资料仅保存在本机应用私有数据库中，全部业务字段会先使用 Android Keystore 保护的密钥进行 AES-256-GCM 加密。</string>
+    <string name="security_notice_offline">应用设计为完全离线，不使用网络、广告或分析服务。</string>
+    <string name="security_notice_no_backup">禁止系统云备份和明文导出；支持由用户主动生成的端到端加密同步文件。</string>
+    <string name="security_notice_screen_protection">锁定及未认证状态禁止截图和录屏；系统身份认证成功后的当前前台会话允许截图、录屏和投屏，进入后台后立即恢复保护。最近任务缩略图始终受保护。</string>
+    <string name="locked_heading">CardVault 已锁定</string>
+    <string name="locked_detail">需要通过系统身份认证后才能继续。CardVault 不保存指纹、面部模板或自定义应用 PIN。</string>
+    <string name="authentication_prompt_title">验证 CardVault 操作</string>
+    <string name="authentication_prompt_subtitle">使用强生物识别或设备锁屏凭据</string>
+    <string name="authentication_in_progress">正在等待系统身份认证…</string>
+    <string name="authentication_failed_generic">身份认证未成功或已取消，未执行任何更改。</string>
+    <string name="security_unavailable_heading">无法安全使用保险库</string>
+    <string name="security_unavailable_no_lock_screen">设备尚未设置安全锁屏。设置安全的 PIN、图案、密码或强生物识别后，才能创建或使用保险库。</string>
+    <string name="security_unavailable_authentication">此设备当前无法提供 CardVault 要求的强生物识别或设备锁屏凭据认证。保险库保持锁定。</string>
+    <string name="vault_unavailable_heading">无法打开加密保险库</string>
+    <string name="vault_unavailable_detail">密钥或加密数据当前不可用。为保护已有密文，CardVault 不会自动重建密钥或跳过损坏记录。</string>
+
+    <string name="empty_cards_heading">暂无银行卡</string>
+    <string name="add_card_title">添加银行卡</string>
+    <string name="card_field_nickname">卡片昵称</string>
+    <string name="card_field_number">卡号</string>
+    <string name="card_field_expiry_date">有效期 (MM/YY)</string>
+    <string name="card_field_expiry_placeholder" translatable="false">MM/YY</string>
+    <string name="card_field_cvv">CVV/CVC</string>
+    <string name="card_field_notes_optional">备注（可选）</string>
+    <string name="card_template_heading">设计卡面</string>
+    <string name="card_warning_luhn">卡号未通过 Luhn 校验，请确认输入；此提醒不会阻止保存。</string>
+    <string name="card_error_nickname_required">请输入卡片昵称。</string>
+    <string name="card_error_nickname_length">卡片昵称最多 50 个字符。</string>
+    <string name="card_error_number_characters">卡号只能包含数字、空格或短横线。</string>
+    <string name="card_error_number_length">卡号必须为 12–19 位数字。</string>
+    <string name="card_error_expiry_month">有效期月份必须为 01–12。</string>
+    <string name="card_error_expiry_year">有效期必须使用 MM/YY 两位年份格式。</string>
+    <string name="card_error_cvv_required">开启保存后必须输入 CVV/CVC。</string>
+    <string name="card_error_cvv_format">CVV/CVC 必须为 3 位或 4 位数字。</string>
+    <string name="card_error_template">所选卡面组合不存在，请重新选择。</string>
+    <string name="card_error_notes_length">备注最多 1000 个字符。</string>
+    <string name="card_error_save_generic">保存失败，请检查表单后重试。</string>
+    <string name="card_error_storage_generic">加密存储操作失败，未显示或保留任何部分数据。</string>
+    <string name="card_error_device_security_required">设备安全锁屏当前不可用，已拒绝保存或修改。</string>
+    <string name="card_expired">已过期</string>
+    <string name="card_stack_item_content_description">第 %1$d 张卡，共 %2$d 张；点按打开，长按拖动排序；敏感内容已隐藏</string>
+    <string name="card_wallet_title">卡包</string>
+    <string name="card_wallet_card_count">%1$d 张卡片</string>
+
+    <string name="vault_home_title">选择保险库</string>
+    <string name="vault_home_subtitle">银行卡与地址分别整理，统一加密保存在本机</string>
+    <string name="vault_home_cards_title">银行卡</string>
+    <string name="vault_home_cards_subtitle">进入卡包、添加银行卡或查看卡片信息</string>
+    <string name="vault_home_addresses_title">地址</string>
+    <string name="vault_home_addresses_subtitle">保存常用地址并快速复制完整信息</string>
+
+    <string name="address_wallet_title">地址簿</string>
+    <string name="address_wallet_count">%1$d 个地址</string>
+    <string name="address_empty_heading">暂无地址</string>
+    <string name="address_empty_detail">添加常用地址后，它们会以卡片形式显示在这里。</string>
+    <string name="address_add_title">添加地址</string>
+    <string name="address_field_nickname">卡片昵称</string>
+    <string name="address_field_detail">详细地址</string>
+    <string name="address_field_city">城市</string>
+    <string name="address_field_other">其它（可选）</string>
+    <string name="address_field_postal_code">邮编</string>
+    <string name="address_field_country">国家</string>
+    <string name="address_error_nickname">请输入 1–50 个字符的卡片昵称。</string>
+    <string name="address_error_detail">请输入不超过 500 个字符的详细地址。</string>
+    <string name="address_error_city">请输入不超过 100 个字符的城市。</string>
+    <string name="address_error_other">其它信息最多 200 个字符。</string>
+    <string name="address_error_postal_code">请输入不超过 20 个字符的邮编。</string>
+    <string name="address_error_country">请输入不超过 100 个字符的国家。</string>
+    <string name="address_error_template">所选卡面配置无效，请重新选择。</string>
+    <string name="address_detail_title">地址详情</string>
+    <string name="address_detail_loading">正在读取地址…</string>
+    <string name="address_detail_not_found">此地址不存在或已不可用。</string>
+    <string name="address_edit">编辑地址</string>
+    <string name="address_edit_title">编辑地址</string>
+    <string name="address_edit_loading">正在安全读取地址信息…</string>
+    <string name="address_edit_unavailable">此地址不存在或编辑状态已失效，请返回后重试。</string>
+    <string name="address_copy_all">复制完整地址</string>
+    <string name="address_copied">完整地址已复制，CardVault 会在离页、进入后台或截止时间到达时尝试清除剪贴板。</string>
+    <string name="address_clipboard_failed">未能复制地址，剪贴板未被更新。</string>
+    <string name="address_storage_failed">加密存储操作失败，未显示或保留部分数据。</string>
+    <string name="address_delete">删除地址</string>
+    <string name="address_delete_confirmation_title">永久删除此地址？</string>
+    <string name="address_delete_confirmation_detail">此操作无法撤销。</string>
+    <string name="address_stack_item_content_description">第 %1$d 个地址，共 %2$d 个；点按打开详情</string>
+
+    <string name="card_detail_title">银行卡详情</string>
+    <string name="card_detail_loading_heading">正在读取银行卡</string>
+    <string name="card_detail_loading_detail">详情加载后仍只会显示掩码信息。</string>
+    <string name="card_detail_not_found_heading">无法读取此记录</string>
+    <string name="card_detail_not_found_detail">该银行卡不存在或已不再可用。请返回列表后重试。</string>
+    <string name="card_detail_sensitive_content_description">银行卡掩码详情；全部敏感展示值已从无障碍语义中隐藏</string>
+    <string name="card_detail_cvv_hidden" translatable="false">•••</string>
+    <string name="card_detail_cvv_not_saved">未保存</string>
+    <string name="card_number_copied">卡号已复制；CardVault 会在敏感显示结束、离页、进入后台或 30 秒截止时间到达时尝试清除剪贴板。</string>
+    <string name="card_clipboard_failed">未能复制卡号，剪贴板未被更新。</string>
+    <string name="card_sensitive_value_content_description">已认证敏感值；具体内容不提供给无障碍语义</string>
+    <string name="card_notes_hidden_semantics">卡片备注；具体内容不提供给无障碍语义</string>
+    <string name="card_delete_confirmation_title">永久删除银行卡？</string>
+    <string name="card_delete_confirmation_detail">此操作不可撤销且不提供撤销缓存。继续后还需要完成一次独立的系统身份认证。</string>
+
+    <string name="edit_card_title">编辑银行卡</string>
+    <string name="card_edit_loading">正在安全解密本次编辑所需字段…</string>
+    <string name="card_edit_unavailable">编辑授权已失效或记录不可用。请返回详情后重新认证。</string>
+    <string name="card_cvv_risk_title">确认保存 CVV/CVC</string>
+    <string name="card_cvv_risk_detail">保存 CVV 会扩大设备失陷时的风险。CardVault 会加密保存，但无法承诺绝对安全，也不支持恢复。只有明确理解风险后才应继续。</string>
+    <string name="card_cvv_risk_confirm">我理解风险并启用</string>
+
+    <string name="settings_title">设置</string>
+    <string name="settings_security_heading">安全</string>
+    <string name="settings_device_heading">设备</string>
+    <string name="masked_entry_authentication_title">进入应用无需认证</string>
+    <string name="masked_entry_authentication_summary">切换应用后可直接返回，并保留未保存的添加或编辑内容。查看完整卡号、CVV，以及编辑和删除仍需系统身份认证。</string>
+
+    <string name="about_privacy_title">关于与隐私</string>
+    <string name="about_security_status">CardVault 是原生 Android 离线保险库，支持加密持久化、原创卡包、敏感信息联合认证显示和手动排序。</string>
+    <string name="about_offline">不请求网络权限，也不加载远程资源。</string>
+    <string name="about_no_tracking">不包含广告、分析、遥测或崩溃上报 SDK。</string>
+    <string name="about_no_backup_export">禁止系统云备份、明文导出和云同步；支持用户主动生成的端到端加密同步文件。</string>
+    <string name="about_encrypted_storage">银行卡业务字段仅以 AES-256-GCM 密文保存于应用私有 Room 数据库；排序和必要时间字段除外。</string>
+
+    <string name="vault_transfer_title">设备间同步</string>
+    <string name="vault_transfer_settings_subtitle">同时导入或导出银行卡与地址</string>
+    <string name="vault_transfer_status_paired">已建立离线配对</string>
+    <string name="vault_transfer_status_unpaired">尚未配对</string>
+    <string name="vault_transfer_export_eyebrow">导出</string>
+    <string name="vault_transfer_generate_sync_title">生成同步文件</string>
+    <string name="vault_transfer_connect_first_title">首次连接其他设备</string>
+    <string name="vault_transfer_sync_description">创建包含当前银行卡与地址状态的端到端加密文件</string>
+    <string name="vault_transfer_pair_description">创建一次性配对文件和配对码</string>
+    <string name="vault_transfer_encrypting">正在加密…</string>
+    <string name="vault_transfer_prepare_export">准备导出</string>
+    <string name="vault_transfer_connect_device">连接新设备</string>
+    <string name="vault_transfer_open_share">打开系统分享</string>
+    <string name="vault_transfer_pairing_code_title">一次性配对码</string>
+    <string name="vault_transfer_pairing_code_instruction">在另一台设备导入配对文件时输入；不要与文件一起转发。</string>
+    <string name="vault_transfer_import_eyebrow">导入</string>
+    <string name="vault_transfer_import_title">从加密文件同步</string>
+    <string name="vault_transfer_import_description">选择微信、QQ 下载或本地保存的 .cvpair / .cvsync 文件</string>
+    <string name="vault_transfer_choose_file">选择文件</string>
+    <string name="vault_transfer_pairing_code_input_title">输入配对码</string>
+    <string name="vault_transfer_pairing_code_placeholder" translatable="false">CVP1-…</string>
+    <string name="vault_transfer_verify_import">验证并导入</string>
+    <string name="vault_transfer_secure_processing">正在安全处理</string>
+    <string name="vault_transfer_encryption_note">文件经过 AES-256-GCM 加密。CardVault 不联网，微信、QQ 或其他应用只负责传送密文。</string>
+    <string name="vault_transfer_share_chooser_title">分享加密同步文件</string>
+    <string name="template_gallery_title">卡面设计</string>
+    <string name="card_flip_to_back">轻点查看卡片背面</string>
+    <string name="card_flip_to_front">轻点返回卡片正面</string>
+
+    <string name="card_preview_content_description">卡面预览；未显示卡号、有效期或安全码</string>
+    <string name="card_face_monogram" translatable="false">CV</string>
+    <string name="card_face_hidden_expiry" translatable="false">••/••</string>
+    <string name="card_style_custom">原创卡面</string>
+    <string name="card_style_nickname_preview">卡片昵称</string>
+    <string name="card_style_color_heading">选择颜色</string>
+    <string name="card_style_pattern_heading">选择花纹</string>
+    <string name="card_style_name_font_heading">名称设计</string>
+    <string name="card_style_name_color_heading">名称颜色</string>
+    <string name="card_color_custom">自定义</string>
+    <string name="card_color_custom_title">自定义卡面颜色</string>
+    <string name="card_name_color_custom_title">自定义名称颜色</string>
+    <string name="card_color_custom_palette">饱和度与明度</string>
+    <string name="card_color_custom_hue">色相</string>
+    <string name="card_color_custom_hex">颜色值 %1$s</string>
+    <string name="card_color_custom_apply">应用颜色</string>
+
+    <string name="card_color_obsidian">曜石黑</string>
+    <string name="card_color_midnight">午夜蓝</string>
+    <string name="card_color_jade">翡翠绿</string>
+    <string name="card_color_garnet">石榴红</string>
+    <string name="card_color_champagne">香槟金</string>
+    <string name="card_color_silver">雾银</string>
+    <string name="card_color_violet">暮紫</string>
+    <string name="card_color_terracotta">暖陶</string>
+    <string name="card_color_carbon">碳灰</string>
+    <string name="card_color_cobalt">钴蓝</string>
+    <string name="card_color_glacier">冰川蓝</string>
+    <string name="card_color_aurora">极光青</string>
+    <string name="card_color_forest">松柏绿</string>
+    <string name="card_color_coral">珊瑚橙</string>
+    <string name="card_color_pearl">珍珠白</string>
+    <string name="card_color_magenta">洋红</string>
+
+    <string name="card_pattern_plain">纯净</string>
+    <string name="card_pattern_contours">等高线</string>
+    <string name="card_pattern_orbits">星轨</string>
+    <string name="card_pattern_waves">流光波纹</string>
+    <string name="card_pattern_stars">星点</string>
+    <string name="card_pattern_facets">几何切面</string>
+    <string name="card_pattern_grid">细格</string>
+    <string name="card_pattern_shards">斜向切片</string>
+    <string name="card_pattern_circuit">回路</string>
+    <string name="card_pattern_ribbons">飘带</string>
+    <string name="card_pattern_halos">光环</string>
+    <string name="card_pattern_dots">点阵</string>
+    <string name="card_pattern_arches">拱门</string>
+    <string name="card_pattern_frame">内框</string>
+    <string name="card_pattern_loops">环线</string>
+    <string name="card_pattern_tiles">菱格</string>
+    <string name="card_pattern_arcs">弧线</string>
+    <string name="card_pattern_continuous">连续波</string>
+
+    <string name="card_name_style_modern">现代无衬线</string>
+    <string name="card_name_style_editorial">典雅衬线</string>
+    <string name="card_name_style_elegant">雅致斜体</string>
+    <string name="card_name_style_mono">等宽字标</string>
+    <string name="card_name_style_wide">宽距排版</string>
+    <string name="card_name_style_light">轻盈细体</string>
+    <string name="card_name_style_monogram">紧凑大字</string>
+    <string name="card_name_style_split">双行排版</string>
+    <string name="card_name_style_orbit">动势斜体</string>
+
+    <string name="card_name_color_auto">自动适配</string>
+    <string name="card_name_color_ivory">象牙白</string>
+    <string name="card_name_color_ink">墨黑</string>
+    <string name="card_name_color_gold">香槟金</string>
+    <string name="card_name_color_silver">银白</string>
+    <string name="card_name_color_ice">冰蓝</string>
+    <string name="card_name_color_mint">薄荷</string>
+    <string name="card_name_color_rose">柔粉</string>
+    <string name="card_name_color_violet">淡紫</string>
+    <string name="card_name_color_coral">珊瑚</string>
+
+    <string name="card_network_visa" translatable="false">VISA</string>
+    <string name="card_network_unionpay_short">银联</string>
+</resources>

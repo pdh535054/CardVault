@@ -1,0 +1,56 @@
+# Local machine configuration
+local.properties
+.gradle/
+**/.gradle/
+.kotlin/
+.tools/
+
+# Build output
+build/
+**/build/
+/dist/
+*.apk
+*.aab
+*.ap_
+*.exe
+*.msi
+
+# Encrypted transfer packages can still contain private vault data
+*.cvpair
+*.cvsync
+
+# Android Studio and IDE state
+.idea/
+*.iml
+out/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Signing keys and credentials
+*.jks
+*.ks
+*.keystore
+*.pk8
+*.p12
+*.pfx
+*.pem
+*.key
+*.idsig
+key.properties
+**/key.properties
+keystore.properties
+**/keystore.properties
+signing.properties
+**/signing.properties
+credentials.properties
+**/credentials.properties
+secrets.properties
+**/secrets.properties
+*.secrets.properties
+.env
+.env.*
+
+# Operating system files
+.DS_Store
+Thumbs.db
