@@ -2,7 +2,7 @@
 
 **Offline encrypted card and address vault for Android and Windows.**
 
-当前版本：Android 1.4.0 / Windows 1.4.0
+当前版本：Android 1.5.5 / Windows 1.5.6
 
 CardVault 是一款完全离线的银行卡与地址资料保险库，提供 Android 与 Windows 两个版本。两端采用一致的深色视觉语言、堆叠卡包、原创卡面、翻转详情、一键复制、增删改和拖动排序；布局会根据手机与桌面屏幕分别适配。
 

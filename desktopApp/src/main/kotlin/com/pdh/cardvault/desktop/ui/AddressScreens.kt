@@ -40,8 +40,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -49,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.pdh.cardvault.desktop.model.DesktopAddress
+import com.pdh.cardvault.desktop.model.DesktopAddressCopyPart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -101,6 +106,8 @@ private fun HomeChoice(symbol: String, title: String, subtitle: String, modifier
 fun AddressWalletScreen(controller: DesktopAppController, modifier: Modifier = Modifier) {
     var deleteConfirmation by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val folderBounds = remember { mutableMapOf<String?, Rect>() }
+    val visibleAddresses = controller.addresses.filter { it.folderId == controller.selectedAddressFolderId }
     Row(modifier.fillMaxSize().padding(32.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(470.dp).fillMaxHeight()) {
             Row(
@@ -123,14 +130,37 @@ fun AddressWalletScreen(controller: DesktopAppController, modifier: Modifier = M
                 ) { Text("＋", fontSize = 20.sp) }
             }
             Spacer(Modifier.height(28.dp))
-            if (controller.addresses.isEmpty()) {
+            DesktopFolderBar(
+                folders = controller.addressFolders,
+                folderOrder = controller.addressFolderOrder,
+                selectedId = controller.selectedAddressFolderId,
+                unfiledCount = controller.addresses.count { it.folderId == null },
+                itemCount = { folderId -> controller.addresses.count { it.folderId == folderId } },
+                onSelect = controller::selectAddressFolder,
+                onCreate = { controller.createFolder(it, com.pdh.cardvault.desktop.model.DesktopFolderKind.ADDRESSES) },
+                onRename = controller::renameFolder,
+                onDelete = controller::deleteFolder,
+                onReorder = { controller.reorderFolders(com.pdh.cardvault.desktop.model.DesktopFolderKind.ADDRESSES, it) },
+                onBounds = { id, bounds -> folderBounds[id] = bounds },
+            )
+            Spacer(Modifier.height(16.dp))
+            if (visibleAddresses.isEmpty()) {
                 EmptyAddresses(controller)
             } else {
                 AddressStack(
-                    addresses = controller.addresses,
+                    addresses = visibleAddresses,
                     selectedId = controller.selectedAddressId,
                     onSelect = controller::selectAddress,
-                    onMove = controller::moveAddress,
+                    onMove = { id, target ->
+                        visibleAddresses.getOrNull(target)?.id?.let { targetId ->
+                            controller.moveAddress(id, controller.addresses.indexOfFirst { it.id == targetId })
+                        }
+                    },
+                    onDrop = { addressId, position ->
+                        val target = folderBounds.entries.firstOrNull { (_, bounds) -> bounds.contains(position) }
+                        val current = controller.addresses.firstOrNull { it.id == addressId }?.folderId
+                        target != null && target.key != current && controller.moveAddressToFolder(addressId, target.key)
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -146,7 +176,7 @@ fun AddressWalletScreen(controller: DesktopAppController, modifier: Modifier = M
                     authenticating = controller.authenticatingAction != null,
                     onEdit = { scope.launch { controller.startEditAddress(address.id) } },
                     onDelete = { deleteConfirmation = true },
-                    onCopy = { controller.copyAddress(address.id) },
+                    onCopy = { part -> controller.copyAddress(address.id, part) },
                 )
             } ?: Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("选择一条地址", color = Color.White.copy(alpha = 0.38f))
@@ -179,37 +209,47 @@ private fun AddressStack(
     selectedId: String?,
     onSelect: (String) -> Unit,
     onMove: (String, Int) -> Unit,
+    onDrop: (String, Offset) -> Boolean,
     modifier: Modifier,
 ) {
     val density = LocalDensity.current
-    Box(modifier) {
+    DesktopStackViewport(itemCount = addresses.size, modifier = modifier) {
         addresses.forEachIndexed { index, address ->
             val selected = address.id == selectedId
             val y by animateDpAsState(
-                targetValue = (index * 74).dp,
+                targetValue = (index * DESKTOP_STACK_STEP_DP).dp,
                 animationSpec = spring(stiffness = Spring.StiffnessLow, dampingRatio = 0.82f),
             )
             val scale by animateFloatAsState(if (selected) 1.018f else 1f)
             var dragY by remember(address.id) { mutableFloatStateOf(0f) }
+            var dragX by remember(address.id) { mutableFloatStateOf(0f) }
+            var origin by remember(address.id) { mutableStateOf(Offset.Zero) }
+            var pointer by remember(address.id) { mutableStateOf(Offset.Unspecified) }
             AddressFace(
                 address = address,
                 compact = true,
-                modifier = Modifier.fillMaxWidth().offset { IntOffset(0, dragY.roundToInt()) }.offset(y = y)
+                modifier = Modifier.fillMaxWidth().offset { IntOffset(dragX.roundToInt(), dragY.roundToInt()) }.offset(y = y)
                     .zIndex(index.toFloat() + if (dragY != 0f) 100f else 0f)
                     .graphicsLayer { scaleX = scale; scaleY = scale }
                     .shadow(if (selected) 22.dp else 12.dp, RoundedCornerShape(28.dp))
+                    .onGloballyPositioned { if (dragX == 0f && dragY == 0f) origin = it.boundsInRoot().topLeft }
                     .clickable { onSelect(address.id) }
                     .pointerInput(address.id, addresses.size) {
                         detectDragGesturesAfterLongPress(
-                            onDragStart = { onSelect(address.id) },
+                            onDragStart = { local -> onSelect(address.id); pointer = origin + local },
                             onDragEnd = {
-                                val step = with(density) { 74.dp.toPx() }
+                                val step = with(density) { DESKTOP_STACK_STEP_DP.dp.toPx() }
                                 val target = (index + dragY / step).roundToInt().coerceIn(addresses.indices)
+                                val dropped = onDrop(address.id, pointer)
+                                dragX = 0f
                                 dragY = 0f
-                                onMove(address.id, target)
+                                pointer = Offset.Unspecified
+                                if (!dropped) onMove(address.id, target)
                             },
-                            onDragCancel = { dragY = 0f },
-                            onDrag = { change, amount -> change.consume(); dragY += amount.y },
+                            onDragCancel = { dragX = 0f; dragY = 0f; pointer = Offset.Unspecified },
+                            onDrag = { change, amount ->
+                                change.consume(); dragX += amount.x; dragY += amount.y; pointer += amount
+                            },
                         )
                     },
             )
@@ -230,7 +270,7 @@ private fun AddressDetailPanel(
     authenticating: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onCopy: () -> Unit,
+    onCopy: (DesktopAddressCopyPart) -> Unit,
 ) {
     var flipped by remember(address.id) { mutableStateOf(false) }
     LaunchedEffect(address.id) {

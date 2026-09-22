@@ -6,6 +6,7 @@ import java.nio.ByteOrder
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import java.util.UUID
 
 data class AddressPayload(
     val nickname: String,
@@ -15,6 +16,7 @@ data class AddressPayload(
     val postalCode: String,
     val country: String,
     val cardTemplateId: String,
+    val folderId: String? = null,
 ) {
     init {
         require(nickname == nickname.trim() && nickname.codePointLength() in 1..50)
@@ -29,6 +31,7 @@ data class AddressPayload(
         // CardVault supported the country field. Newly submitted records require a country.
         require(country == country.trim() && country.codePointLength() <= 100)
         require(cardTemplateId.isNotBlank() && cardTemplateId.length <= 400)
+        require(folderId == null || runCatching { UUID.fromString(folderId).toString() == folderId }.getOrDefault(false))
     }
 
     override fun toString(): String = "AddressPayload(sensitiveFields=redacted)"
@@ -46,6 +49,7 @@ class AddressPayloadCodec {
             payload.postalCode,
             payload.country,
             payload.cardTemplateId,
+            payload.folderId.orEmpty(),
         ).map { value -> value.encodedUtf8() }
         return try {
             val totalSize =
@@ -90,6 +94,10 @@ class AddressPayloadCodec {
             } else {
                 ""
             }
+            val cardTemplateId = buffer.readString(MAX_TEMPLATE_ID_BYTES)
+            val folderId = if (expectedSchemaVersion >= FOLDER_SCHEMA_VERSION) {
+                buffer.readString(MAX_FOLDER_ID_BYTES).ifBlank { null }
+            } else null
             val payload = AddressPayload(
                 nickname = nickname,
                 detailedAddress = detailedAddress,
@@ -97,7 +105,8 @@ class AddressPayloadCodec {
                 other = other,
                 postalCode = postalCode,
                 country = country,
-                cardTemplateId = buffer.readString(MAX_TEMPLATE_ID_BYTES),
+                cardTemplateId = cardTemplateId,
+                folderId = folderId,
             )
             if (buffer.hasRemaining()) throw InvalidEncryptedPayloadException()
             payload
@@ -141,7 +150,8 @@ class AddressPayloadCodec {
     private companion object {
         const val LEGACY_SCHEMA_VERSION = 1
         const val COUNTRY_SCHEMA_VERSION = 2
-        const val CURRENT_SCHEMA_VERSION = COUNTRY_SCHEMA_VERSION
+        const val FOLDER_SCHEMA_VERSION = 3
+        const val CURRENT_SCHEMA_VERSION = FOLDER_SCHEMA_VERSION
         const val MAX_PAYLOAD_BYTES = 16 * 1024
         const val MIN_PAYLOAD_BYTES = 48
         const val MAX_MAGIC_BYTES = 64
@@ -152,6 +162,7 @@ class AddressPayloadCodec {
         const val MAX_POSTAL_CODE_BYTES = 80
         const val MAX_COUNTRY_BYTES = 400
         const val MAX_TEMPLATE_ID_BYTES = 400
+        const val MAX_FOLDER_ID_BYTES = 36
         val MAGIC = "CardVault/AddressPayload".toByteArray(StandardCharsets.UTF_8)
 
         fun encodedStringSize(bytes: ByteArray): Int = Int.SIZE_BYTES + bytes.size

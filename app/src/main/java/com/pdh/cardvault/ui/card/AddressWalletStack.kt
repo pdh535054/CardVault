@@ -24,9 +24,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
@@ -55,6 +58,7 @@ fun AddressWalletStack(
     onAddressOpened: (UUID) -> Unit,
     onAddressesReordered: (List<UUID>) -> Unit,
     modifier: Modifier = Modifier,
+    onAddressDropped: ((UUID, Offset) -> Boolean)? = null,
 ) {
     if (addresses.isEmpty()) return
 
@@ -62,6 +66,8 @@ fun AddressWalletStack(
     var dragStartOrder by remember { mutableStateOf(addresses) }
     var draggingAddressId by remember { mutableStateOf<UUID?>(null) }
     var dragDistancePx by remember { mutableFloatStateOf(0f) }
+    var dragDistanceXPx by remember { mutableFloatStateOf(0f) }
+    var dragPointerInRoot by remember { mutableStateOf(Offset.Unspecified) }
     var dragStartIndex by remember { mutableIntStateOf(-1) }
     var dragTargetIndex by remember { mutableIntStateOf(-1) }
     val latestAddresses by rememberUpdatedState(addresses)
@@ -95,6 +101,7 @@ fun AddressWalletStack(
                 key(address.id) {
                     val isDragging = draggingAddressId == address.id
                     var hasEntered by remember(address.id) { mutableStateOf(false) }
+                    var cardOriginInRoot by remember(address.id) { mutableStateOf(Offset.Zero) }
                     LaunchedEffect(address.id) { hasEntered = true }
                     val targetOffset = walletCardOffset(index, ADDRESS_CARD_PEEK.value).dp
                     val animatedOffset by animateDpAsState(
@@ -165,6 +172,7 @@ fun AddressWalletStack(
                                 if (isDragging) draftAddresses.size + 1f else index.toFloat(),
                             )
                             .graphicsLayer {
+                                translationX = if (isDragging) dragDistanceXPx else 0f
                                 translationY = if (isDragging) {
                                     targetOffset.toPx() + dragCompensationPx
                                 } else {
@@ -179,10 +187,13 @@ fun AddressWalletStack(
                                 shape = cardShape
                                 clip = false
                             }
+                            .onGloballyPositioned { coordinates ->
+                                if (!isDragging) cardOriginInRoot = coordinates.boundsInRoot().topLeft
+                            }
                             .pointerInput(address.id, sortingInProgress) {
                                 if (sortingInProgress) return@pointerInput
                                 detectDragGesturesAfterLongPress(
-                                    onDragStart = {
+                                    onDragStart = { localOffset ->
                                         val start = latestDraftAddresses.indexOfFirst {
                                             it.id == address.id
                                         }
@@ -192,17 +203,17 @@ fun AddressWalletStack(
                                             dragStartIndex = start
                                             dragTargetIndex = start
                                             dragDistancePx = 0f
+                                            dragDistanceXPx = 0f
+                                            dragPointerInRoot = cardOriginInRoot + localOffset
                                             draggingAddressId = address.id
                                         }
                                     },
                                     onDrag = { change, amount ->
                                         if (draggingAddressId == address.id) {
                                             change.consume()
-                                            val maxUp = -dragStartIndex * peekPx
-                                            val maxDown =
-                                                (dragStartOrder.lastIndex - dragStartIndex) * peekPx
-                                            dragDistancePx = (dragDistancePx + amount.y)
-                                                .coerceIn(maxUp, maxDown)
+                                            dragDistanceXPx += amount.x
+                                            dragDistancePx += amount.y
+                                            dragPointerInRoot += amount
                                             val target = dragTargetIndex(
                                                 startIndex = dragStartIndex,
                                                 dragDistancePx = dragDistancePx,
@@ -224,17 +235,27 @@ fun AddressWalletStack(
                                     },
                                     onDragEnd = {
                                         if (draggingAddressId == address.id) {
-                                            onAddressesReordered(
-                                                draftAddresses.map(AddressListItemUiModel::id),
-                                            )
+                                            val dropped = onAddressDropped?.invoke(
+                                                address.id,
+                                                dragPointerInRoot,
+                                            ) == true
+                                            if (!dropped) {
+                                                onAddressesReordered(
+                                                    draftAddresses.map(AddressListItemUiModel::id),
+                                                )
+                                            }
                                         }
                                         draggingAddressId = null
                                         dragDistancePx = 0f
+                                        dragDistanceXPx = 0f
+                                        dragPointerInRoot = Offset.Unspecified
                                     },
                                     onDragCancel = {
                                         draftAddresses = latestAddresses
                                         draggingAddressId = null
                                         dragDistancePx = 0f
+                                        dragDistanceXPx = 0f
+                                        dragPointerInRoot = Offset.Unspecified
                                     },
                                 )
                             }

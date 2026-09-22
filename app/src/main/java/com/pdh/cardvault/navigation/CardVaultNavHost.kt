@@ -18,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.pdh.cardvault.presentation.CardFormField
 import com.pdh.cardvault.presentation.AddressFormField
+import com.pdh.cardvault.presentation.AddressCopyPart
 import com.pdh.cardvault.presentation.AddressNavigationEvent
 import com.pdh.cardvault.presentation.AddressesUiState
 import com.pdh.cardvault.presentation.CardEditUiState
@@ -54,9 +55,9 @@ fun CardVaultNavHost(
     onStartupAuthenticationChanged: (Boolean) -> Unit,
     vaultTransferUiState: VaultTransferUiState,
     onPrepareVaultExport: () -> Unit,
-    onPrepareNewDevicePairing: () -> Unit,
     onRotateVaultSyncKey: () -> Unit,
     onSharePreparedVaultExport: () -> Unit,
+    onCopyVaultPairingCode: () -> Unit,
     onVaultImportUriSelected: (String) -> Unit,
     onVaultPairingCodeChanged: (String) -> Unit,
     onConfirmVaultPairingImport: () -> Unit,
@@ -68,9 +69,14 @@ fun CardVaultNavHost(
     onClearAddressForm: () -> Unit,
     onLoadAddressDetail: (String?) -> Unit,
     onClearAddressDetail: () -> Unit,
-    onCopyAddress: (UUID) -> Unit,
+    onCopyAddress: (UUID, AddressCopyPart) -> Unit,
     onDeleteAddress: (UUID) -> Unit,
     onAddressesReordered: (List<UUID>) -> Unit,
+    onAddressFoldersReordered: (List<UUID?>) -> Unit,
+    onCreateAddressFolder: (String) -> Unit,
+    onRenameAddressFolder: (UUID, String) -> Unit,
+    onDeleteAddressFolder: (UUID) -> Unit,
+    onMoveAddressToFolder: (UUID, UUID?) -> Unit,
     onLoadAddressEdit: (String?) -> Unit,
     onAddressEditFieldChanged: (AddressFormField, String) -> Unit,
     onAddressEditTemplateSelected: (String) -> Unit,
@@ -86,6 +92,11 @@ fun CardVaultNavHost(
     onLoadCardDetail: (String?) -> Unit,
     onClearCardDetail: () -> Unit,
     onCardsReordered: (List<UUID>) -> Unit,
+    onCardFoldersReordered: (List<UUID?>) -> Unit,
+    onCreateCardFolder: (String) -> Unit,
+    onRenameCardFolder: (UUID, String) -> Unit,
+    onDeleteCardFolder: (UUID) -> Unit,
+    onMoveCardToFolder: (UUID, UUID?) -> Unit,
     onRequestCardAuthentication: (AuthenticationAction, UUID) -> Unit,
     onHideCardSecrets: () -> Unit,
     onCopyRevealedCardNumber: (UUID) -> Unit,
@@ -203,6 +214,8 @@ fun CardVaultNavHost(
         composable(CardVaultDestination.Cards.route) {
             CardListScreen(
                 cards = cardsUiState.cards,
+                folders = cardsUiState.folders,
+                folderOrder = cardsUiState.folderOrder,
                 sortingInProgress = cardsUiState.sortingInProgress,
                 operationMessage = cardsUiState.operationMessage,
                 onBackToHome = navController::popBackStack,
@@ -219,6 +232,11 @@ fun CardVaultNavHost(
                     navController.navigate(CardVaultDestination.cardDetailRoute(recordId))
                 },
                 onCardsReordered = onCardsReordered,
+                onFoldersReordered = onCardFoldersReordered,
+                onCreateFolder = onCreateCardFolder,
+                onRenameFolder = onRenameCardFolder,
+                onDeleteFolder = onDeleteCardFolder,
+                onMoveCardToFolder = onMoveCardToFolder,
             )
         }
         composable(CardVaultDestination.AddCard.route) {
@@ -336,9 +354,9 @@ fun CardVaultNavHost(
                 state = vaultTransferUiState,
                 onBack = navController::popBackStack,
                 onPrepareExport = onPrepareVaultExport,
-                onPrepareNewDevicePairing = onPrepareNewDevicePairing,
                 onRotateSyncKey = onRotateVaultSyncKey,
                 onSharePreparedExport = onSharePreparedVaultExport,
+                onCopyPairingCode = onCopyVaultPairingCode,
                 onImportUriSelected = onVaultImportUriSelected,
                 onPairingCodeChanged = onVaultPairingCodeChanged,
                 onConfirmPairingImport = onConfirmVaultPairingImport,
@@ -353,6 +371,8 @@ fun CardVaultNavHost(
         composable(CardVaultDestination.Addresses.route) {
             AddressListScreen(
                 addresses = addressesUiState.addresses,
+                folders = addressesUiState.folders,
+                folderOrder = addressesUiState.folderOrder,
                 sortingInProgress = addressesUiState.sortingInProgress,
                 operationMessage = addressesUiState.operationMessage,
                 onBack = navController::popBackStack,
@@ -363,6 +383,11 @@ fun CardVaultNavHost(
                     navController.navigate(CardVaultDestination.addressDetailRoute(recordId))
                 },
                 onAddressesReordered = onAddressesReordered,
+                onFoldersReordered = onAddressFoldersReordered,
+                onCreateFolder = onCreateAddressFolder,
+                onRenameFolder = onRenameAddressFolder,
+                onDeleteFolder = onDeleteAddressFolder,
+                onMoveAddressToFolder = onMoveAddressToFolder,
             )
         }
         composable(CardVaultDestination.AddAddress.route) {

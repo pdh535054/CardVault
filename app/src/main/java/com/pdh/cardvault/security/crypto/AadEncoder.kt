@@ -8,6 +8,7 @@ import java.util.UUID
 internal object AadEncoder {
     private val cardDomain = "CardVault/Card".toByteArray(StandardCharsets.UTF_8)
     private val addressDomain = "CardVault/Address".toByteArray(StandardCharsets.UTF_8)
+    private val folderDomain = "CardVault/Folder".toByteArray(StandardCharsets.UTF_8)
     private val dekDomain = "CardVault/DEK".toByteArray(StandardCharsets.UTF_8)
 
     fun forCard(recordId: UUID, payloadSchemaVersion: Int): ByteArray =
@@ -25,6 +26,16 @@ internal object AadEncoder {
             .order(ByteOrder.BIG_ENDIAN)
             .putInt(addressDomain.size)
             .put(addressDomain)
+            .putLong(recordId.mostSignificantBits)
+            .putLong(recordId.leastSignificantBits)
+            .putInt(payloadSchemaVersion)
+            .array()
+
+    fun forFolder(recordId: UUID, payloadSchemaVersion: Int): ByteArray =
+        ByteBuffer.allocate(Int.SIZE_BYTES + folderDomain.size + UUID_BYTES + Int.SIZE_BYTES)
+            .order(ByteOrder.BIG_ENDIAN)
+            .putInt(folderDomain.size)
+            .put(folderDomain)
             .putLong(recordId.mostSignificantBits)
             .putLong(recordId.leastSignificantBits)
             .putInt(payloadSchemaVersion)

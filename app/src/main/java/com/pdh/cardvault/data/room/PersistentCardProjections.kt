@@ -12,6 +12,7 @@ data class PersistentCardListItem(
     val issuerName: String,
     val cardTemplateId: String,
     val cardNetwork: CardNetwork?,
+    val folderId: UUID? = null,
 ) {
     override fun toString(): String = "PersistentCardListItem(sensitiveFields=redacted)"
 }
@@ -22,6 +23,7 @@ data class PersistentCardDetail(
     val issuerName: String,
     val maskedCardNumber: String,
     val cardTemplateId: String,
+    val folderId: UUID? = null,
     val notes: String,
     val cvvSaved: Boolean,
     val cardNetwork: CardNetwork?,
@@ -71,6 +73,7 @@ data class PersistentAddressListItem(
     val id: UUID,
     val nickname: String,
     val cardTemplateId: String,
+    val folderId: UUID? = null,
 ) {
     override fun toString(): String = "PersistentAddressListItem(sensitiveFields=redacted)"
 }
@@ -83,8 +86,30 @@ data class PersistentAddressDetail(
     val postalCode: String,
     val country: String,
     val cardTemplateId: String,
+    val folderId: UUID? = null,
 ) {
     override fun toString(): String = "PersistentAddressDetail(sensitiveFields=redacted)"
+}
+
+enum class VaultFolderKind { CARDS, ADDRESSES }
+
+data class PersistentVaultFolder(
+    val id: UUID,
+    val name: String,
+    val kind: VaultFolderKind,
+) {
+    override fun toString(): String = "PersistentVaultFolder(name=redacted, kind=$kind)"
+}
+
+interface PersistentVaultFolderRepository {
+    suspend fun getFolders(kind: VaultFolderKind): List<PersistentVaultFolder>
+    suspend fun getFolderOrder(kind: VaultFolderKind): List<UUID?>
+    suspend fun reorderFolders(kind: VaultFolderKind, orderedIds: List<UUID?>)
+    suspend fun createFolder(kind: VaultFolderKind, name: String): UUID
+    suspend fun renameFolder(id: UUID, name: String): Boolean
+    suspend fun deleteFolder(id: UUID): Boolean
+    suspend fun moveCardToFolder(cardId: UUID, folderId: UUID?): Boolean
+    suspend fun moveAddressToFolder(addressId: UUID, folderId: UUID?): Boolean
 }
 
 interface PersistentAddressRepository {

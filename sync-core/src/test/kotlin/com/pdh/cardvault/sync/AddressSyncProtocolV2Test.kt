@@ -149,7 +149,7 @@ class AddressSyncProtocolV2Test {
             }.code,
         )
         val unsupported = encoded.copyOf().also { bytes ->
-            ByteBuffer.wrap(bytes, 8, Int.SIZE_BYTES).order(ByteOrder.BIG_ENDIAN).putInt(3)
+            ByteBuffer.wrap(bytes, 8, Int.SIZE_BYTES).order(ByteOrder.BIG_ENDIAN).putInt(4)
         }
         assertEquals(
             SyncErrorCode.UNSUPPORTED_VERSION,

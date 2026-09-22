@@ -27,6 +27,11 @@ class DesktopAddressTest {
 
         assertEquals("虚构住所", address.nickname)
         assertEquals("虚构大道 99 号\n虚构楼层\n虚构城\n000000\n虚构国", address.copyText())
+        assertEquals("虚构大道 99 号", address.copyText(DesktopAddressCopyPart.DetailedAddress))
+        assertEquals("虚构楼层", address.copyText(DesktopAddressCopyPart.Other))
+        assertEquals("虚构城", address.copyText(DesktopAddressCopyPart.City))
+        assertEquals("000000", address.copyText(DesktopAddressCopyPart.PostalCode))
+        assertEquals("虚构国", address.copyText(DesktopAddressCopyPart.Country))
     }
 
     @Test

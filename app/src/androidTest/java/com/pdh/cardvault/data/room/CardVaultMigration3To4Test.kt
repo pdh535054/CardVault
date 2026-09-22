@@ -107,6 +107,86 @@ class CardVaultMigration3To4Test {
         assertEquals(0, rowCount(sqlite, "address_sync_tombstones"))
     }
 
+    @Test
+    fun migrationFourToFivePreservesExistingRowsAndAddsEncryptedFolderTables() {
+        val recordId = UUID.randomUUID().toString()
+        val ciphertext = byteArrayOf(0x45, 0x4e, 0x43, 0x05)
+        val recordIv = byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05, 0x06)
+        createVersionFourDatabase(recordId, ciphertext, recordIv)
+
+        val roomDatabase = Room.databaseBuilder(
+            context,
+            CardVaultDatabase::class.java,
+            databaseName,
+        )
+            .addMigrations(CardVaultDatabase.MIGRATION_4_5)
+            .build()
+            .also { migratedDatabase = it }
+        val sqlite = roomDatabase.openHelper.writableDatabase
+
+        sqlite.query("SELECT ciphertext, recordIv FROM addresses WHERE id = ?", arrayOf(recordId)).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertArrayEquals(ciphertext, cursor.getBlob(0))
+            assertArrayEquals(recordIv, cursor.getBlob(1))
+        }
+        assertEquals(
+            setOf(
+                "id",
+                "ciphertext",
+                "recordIv",
+                "payloadSchemaVersion",
+                "cryptoVersion",
+                "createdAt",
+                "updatedAt",
+                "versionVector",
+            ),
+            tableColumns(sqlite, "vault_folders"),
+        )
+        assertEquals(
+            setOf("recordId", "versionVector", "deletedAt"),
+            tableColumns(sqlite, "folder_sync_tombstones"),
+        )
+        assertEquals(0, rowCount(sqlite, "vault_folders"))
+        assertEquals(0, rowCount(sqlite, "folder_sync_tombstones"))
+    }
+
+    @Test
+    fun migrationFiveToSixPreservesExistingRowsAndAddsFolderDisplayOrder() {
+        val recordId = UUID.randomUUID().toString()
+        val ciphertext = byteArrayOf(0x45, 0x4e, 0x43, 0x06)
+        val recordIv = byteArrayOf(0x06, 0x05, 0x04, 0x03, 0x02, 0x01)
+        createVersionFourDatabase(recordId, ciphertext, recordIv)
+
+        Room.databaseBuilder(context, CardVaultDatabase::class.java, databaseName)
+            .addMigrations(CardVaultDatabase.MIGRATION_4_5)
+            .build()
+            .also { versionFive ->
+                versionFive.openHelper.writableDatabase
+                versionFive.close()
+            }
+
+        val roomDatabase = Room.databaseBuilder(
+            context,
+            CardVaultDatabase::class.java,
+            databaseName,
+        )
+            .addMigrations(CardVaultDatabase.MIGRATION_5_6)
+            .build()
+            .also { migratedDatabase = it }
+        val sqlite = roomDatabase.openHelper.writableDatabase
+
+        sqlite.query("SELECT ciphertext, recordIv FROM addresses WHERE id = ?", arrayOf(recordId)).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertArrayEquals(ciphertext, cursor.getBlob(0))
+            assertArrayEquals(recordIv, cursor.getBlob(1))
+        }
+        assertEquals(
+            setOf("collection", "orderedEntries"),
+            tableColumns(sqlite, "vault_folder_display_order"),
+        )
+        assertEquals(0, rowCount(sqlite, "vault_folder_display_order"))
+    }
+
     private fun createVersionThreeDatabase(
         recordId: String,
         ciphertext: ByteArray,
@@ -150,6 +230,34 @@ class CardVaultMigration3To4Test {
         }
     }
 
+    private fun createVersionFourDatabase(
+        recordId: String,
+        ciphertext: ByteArray,
+        recordIv: ByteArray,
+    ) {
+        val databaseFile = context.getDatabasePath(databaseName)
+        databaseFile.parentFile?.let { parent -> check(parent.isDirectory || parent.mkdirs()) }
+        SQLiteDatabase.openOrCreateDatabase(databaseFile, null).use { sqlite ->
+            VERSION_THREE_CREATE_STATEMENTS.forEach(sqlite::execSQL)
+            sqlite.execSQL("ALTER TABLE addresses ADD COLUMN versionVector BLOB NOT NULL DEFAULT X''")
+            sqlite.execSQL(VERSION_FOUR_ADDRESS_ORDER)
+            sqlite.execSQL(VERSION_FOUR_ADDRESS_TOMBSTONES)
+            sqlite.execSQL(
+                "INSERT INTO addresses (id, ciphertext, recordIv, payloadSchemaVersion, cryptoVersion, " +
+                    "sortOrder, createdAt, updatedAt, versionVector) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                arrayOf(recordId, ciphertext, recordIv, 2, 1, 0, 1L, 2L, byteArrayOf(1)),
+            )
+            sqlite.execSQL(
+                "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)",
+            )
+            sqlite.execSQL(
+                "INSERT OR REPLACE INTO room_master_table (id, identity_hash) VALUES (42, ?)",
+                arrayOf(VERSION_FOUR_IDENTITY_HASH),
+            )
+            sqlite.version = 4
+        }
+    }
+
     private fun tableColumns(
         database: androidx.sqlite.db.SupportSQLiteDatabase,
         tableName: String,
@@ -170,6 +278,27 @@ class CardVaultMigration3To4Test {
 
     private companion object {
         const val VERSION_THREE_IDENTITY_HASH = "f700b76c67c120f52c776faac898ba85"
+        const val VERSION_FOUR_IDENTITY_HASH = "80fb3b64a96bbc72364b7031da1d348d"
+
+        val VERSION_FOUR_ADDRESS_ORDER =
+            """
+            CREATE TABLE IF NOT EXISTS address_sync_order_state (
+                singletonId INTEGER NOT NULL,
+                versionVector BLOB NOT NULL,
+                updatedAt INTEGER NOT NULL,
+                PRIMARY KEY(singletonId)
+            )
+            """.trimIndent()
+
+        val VERSION_FOUR_ADDRESS_TOMBSTONES =
+            """
+            CREATE TABLE IF NOT EXISTS address_sync_tombstones (
+                recordId TEXT NOT NULL,
+                versionVector BLOB NOT NULL,
+                deletedAt INTEGER NOT NULL,
+                PRIMARY KEY(recordId)
+            )
+            """.trimIndent()
 
         val VERSION_THREE_CREATE_STATEMENTS = listOf(
             """

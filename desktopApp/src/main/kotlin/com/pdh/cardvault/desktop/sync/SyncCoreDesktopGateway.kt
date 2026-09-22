@@ -7,6 +7,8 @@ import com.pdh.cardvault.desktop.data.SecretBytes as DesktopSecret
 import com.pdh.cardvault.desktop.data.VersionVector as DesktopVector
 import com.pdh.cardvault.desktop.model.DesktopCard
 import com.pdh.cardvault.desktop.model.DesktopAddress
+import com.pdh.cardvault.desktop.model.DesktopFolder
+import com.pdh.cardvault.desktop.model.DesktopFolderKind
 import com.pdh.cardvault.sync.AddressSyncPayload
 import com.pdh.cardvault.sync.AddressSyncRecord
 import com.pdh.cardvault.sync.AddressSyncRecordValue
@@ -28,6 +30,11 @@ import com.pdh.cardvault.sync.SyncRecord
 import com.pdh.cardvault.sync.SyncRecordValue
 import com.pdh.cardvault.sync.SyncSnapshot
 import com.pdh.cardvault.sync.VersionVector as CoreVector
+import com.pdh.cardvault.sync.FolderCollectionKind
+import com.pdh.cardvault.sync.FolderSyncPayload
+import com.pdh.cardvault.sync.FolderSyncRecord
+import com.pdh.cardvault.sync.FolderSyncRecordValue
+import com.pdh.cardvault.sync.FolderSyncSnapshot
 import java.security.SecureRandom
 import java.time.Clock
 import java.util.UUID
@@ -181,20 +188,22 @@ class SyncCoreDesktopGateway(
         if (payload.sourceDeviceId == currentState.deviceId) {
             throw DesktopSyncException(SyncErrorCode.REPLAYED_PACKAGE)
         }
-        if (currentState.sharedSyncKey != null && currentState.vaultId != payload.vaultId) {
-            throw DesktopSyncException(SyncErrorCode.VAULT_MISMATCH)
-        }
-        if (currentState.sharedSyncKey != null && payload.keyEpoch < currentState.keyEpoch) {
+        val sameVault = currentState.vaultId == payload.vaultId
+        if (currentState.sharedSyncKey != null && sameVault && payload.keyEpoch < currentState.keyEpoch) {
             throw DesktopSyncException(SyncErrorCode.STALE_PACKAGE)
         }
         val acceptsNewerKeyEpoch = currentState.sharedSyncKey != null &&
             payload.keyEpoch > currentState.keyEpoch
         val replay = ReplayProtector.accept(
-            metadata = currentState.toReplayMetadata(),
+            metadata = if (sameVault) {
+                currentState.toReplayMetadata()
+            } else {
+                ReplayMetadata(emptyList(), emptyMap())
+            },
             descriptor = ReplayProtector.descriptor(payload),
-            expectedVaultId = currentState.vaultId.takeIf { currentState.sharedSyncKey != null },
+            expectedVaultId = null,
             expectedKeyEpoch = currentState.keyEpoch.toInt().takeIf {
-                currentState.sharedSyncKey != null && !acceptsNewerKeyEpoch
+                currentState.sharedSyncKey != null && sameVault && !acceptsNewerKeyEpoch
             },
         )
         val merged = SnapshotMerger.merge(current.toCoreSnapshot(), payload.snapshot, currentState.deviceId)
@@ -271,7 +280,7 @@ class SyncCoreDesktopGateway(
     } else value + 1
 
     companion object {
-        private const val PAIRING_LIFETIME_MILLIS = 24L * 60 * 60 * 1000
+        private const val PAIRING_LIFETIME_MILLIS = 7L * 24L * 60 * 60 * 1000
     }
 }
 
@@ -284,6 +293,7 @@ private fun DesktopVaultSnapshot.toCoreSnapshot(): SyncSnapshot {
             version = vector.toCore(),
             value = SyncRecordValue.Active(
                 payload = CardSyncPayload(
+                    schemaVersion = 2,
                     nickname = card.nickname,
                     issuerName = card.issuerName,
                     cardNumber = card.cardNumber,
@@ -293,6 +303,7 @@ private fun DesktopVaultSnapshot.toCoreSnapshot(): SyncSnapshot {
                     cvv = card.cvv,
                     cardTemplateId = card.cardTemplateId,
                     notes = card.notes,
+                    folderId = card.folderId,
                 ),
                 createdAtEpochMillis = card.createdAtEpochMillis,
                 updatedAtEpochMillis = card.updatedAtEpochMillis,
@@ -314,6 +325,7 @@ private fun DesktopVaultSnapshot.toCoreSnapshot(): SyncSnapshot {
             version = vector.toCore(),
             value = AddressSyncRecordValue.Active(
                 payload = AddressSyncPayload(
+                    schemaVersion = 2,
                     nickname = address.nickname,
                     detailedAddress = address.detailedAddress,
                     city = address.city,
@@ -321,6 +333,7 @@ private fun DesktopVaultSnapshot.toCoreSnapshot(): SyncSnapshot {
                     postalCode = address.postalCode,
                     country = address.country,
                     cardTemplateId = address.cardTemplateId,
+                    folderId = address.folderId,
                 ),
                 createdAtEpochMillis = address.createdAtEpochMillis,
                 updatedAtEpochMillis = address.updatedAtEpochMillis,
@@ -332,6 +345,32 @@ private fun DesktopVaultSnapshot.toCoreSnapshot(): SyncSnapshot {
             recordId = tombstone.recordId,
             version = tombstone.vector.toCore(),
             value = AddressSyncRecordValue.Tombstone(tombstone.deletedAtEpochMillis),
+        )
+    }
+    val activeFolders = folders.map { folder ->
+        val vector = syncState.folderRecordVectors[folder.id]
+            ?: DesktopVector().increment(syncState.deviceId)
+        FolderSyncRecord(
+            recordId = folder.id,
+            version = vector.toCore(),
+            value = FolderSyncRecordValue.Active(
+                payload = FolderSyncPayload(
+                    collection = when (folder.kind) {
+                        DesktopFolderKind.CARDS -> FolderCollectionKind.CARDS
+                        DesktopFolderKind.ADDRESSES -> FolderCollectionKind.ADDRESSES
+                    },
+                    name = folder.name,
+                ),
+                createdAtEpochMillis = folder.createdAtEpochMillis,
+                updatedAtEpochMillis = folder.updatedAtEpochMillis,
+            ),
+        )
+    }
+    val deletedFolders = syncState.folderTombstones.values.map { tombstone ->
+        FolderSyncRecord(
+            recordId = tombstone.recordId,
+            version = tombstone.vector.toCore(),
+            value = FolderSyncRecordValue.Tombstone(tombstone.deletedAtEpochMillis),
         )
     }
     return SyncSnapshot(
@@ -349,6 +388,7 @@ private fun DesktopVaultSnapshot.toCoreSnapshot(): SyncSnapshot {
                 recordIds = addresses.sortedBy(DesktopAddress::sortOrder).map(DesktopAddress::id),
             ),
         ),
+        folders = FolderSyncSnapshot((activeFolders + deletedFolders).sortedBy(FolderSyncRecord::recordId)),
     )
 }
 
@@ -368,6 +408,7 @@ private fun SyncSnapshot.toDesktopSnapshot(revision: Long, base: DesktopSyncStat
             sortOrder = 0,
             createdAtEpochMillis = value.createdAtEpochMillis,
             updatedAtEpochMillis = value.updatedAtEpochMillis,
+            folderId = value.payload.folderId,
         )
     }.toMap()
     val cards = order.recordIds.mapIndexed { index, id -> requireNotNull(activeById[id]).copy(sortOrder = index) }
@@ -392,6 +433,7 @@ private fun SyncSnapshot.toDesktopSnapshot(revision: Long, base: DesktopSyncStat
             sortOrder = 0,
             createdAtEpochMillis = value.createdAtEpochMillis,
             updatedAtEpochMillis = value.updatedAtEpochMillis,
+            folderId = value.payload.folderId,
         )
     }.toMap()
     val desktopAddresses = addressSnapshot?.order?.recordIds.orEmpty().mapIndexed { index, id ->
@@ -408,6 +450,31 @@ private fun SyncSnapshot.toDesktopSnapshot(revision: Long, base: DesktopSyncStat
             vector = record.version.toDesktop(),
         )
     }.toMap()
+    val folderSnapshot = folders
+    val desktopFolders = folderSnapshot?.records.orEmpty().mapNotNull { record ->
+        val value = record.value as? FolderSyncRecordValue.Active ?: return@mapNotNull null
+        DesktopFolder(
+            id = record.recordId,
+            name = value.payload.name,
+            kind = when (value.payload.collection) {
+                FolderCollectionKind.CARDS -> DesktopFolderKind.CARDS
+                FolderCollectionKind.ADDRESSES -> DesktopFolderKind.ADDRESSES
+            },
+            createdAtEpochMillis = value.createdAtEpochMillis,
+            updatedAtEpochMillis = value.updatedAtEpochMillis,
+        )
+    }
+    val folderVectors = folderSnapshot?.records.orEmpty()
+        .filter { it.value is FolderSyncRecordValue.Active }
+        .associate { it.recordId to it.version.toDesktop() }
+    val folderTombstones = folderSnapshot?.records.orEmpty().mapNotNull { record ->
+        val value = record.value as? FolderSyncRecordValue.Tombstone ?: return@mapNotNull null
+        record.recordId to DesktopTombstone(
+            recordId = record.recordId,
+            deletedAtEpochMillis = value.deletedAtEpochMillis,
+            vector = record.version.toDesktop(),
+        )
+    }.toMap()
     return DesktopVaultSnapshot(
         cards = cards,
         revision = revision,
@@ -418,8 +485,11 @@ private fun SyncSnapshot.toDesktopSnapshot(revision: Long, base: DesktopSyncStat
             addressRecordVectors = addressVectors,
             addressTombstones = addressTombstones,
             addressOrderVector = addressSnapshot?.order?.version?.toDesktop() ?: base.addressOrderVector,
+            folderRecordVectors = folderVectors,
+            folderTombstones = folderTombstones,
         ),
         addresses = desktopAddresses,
+        folders = desktopFolders,
     )
 }
 
@@ -436,7 +506,7 @@ private fun DesktopSyncState.withReplay(replay: ReplayMetadata): DesktopSyncStat
     replaySequences = replay.highestSequenceByDevice,
 )
 
-class DesktopSyncException(code: SyncErrorCode) : IllegalStateException(
+class DesktopSyncException(val code: SyncErrorCode) : IllegalStateException(
     when (code) {
         SyncErrorCode.INVALID_PAIRING_CODE -> "配对码无效。"
         SyncErrorCode.AUTHENTICATION_FAILED -> "无法验证该加密文件。"

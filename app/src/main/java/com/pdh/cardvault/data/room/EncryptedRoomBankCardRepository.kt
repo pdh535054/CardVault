@@ -16,6 +16,10 @@ import com.pdh.cardvault.security.crypto.DekWrapper
 import com.pdh.cardvault.security.crypto.EncryptedCardRecord
 import com.pdh.cardvault.security.crypto.EncryptedAddressRecord
 import com.pdh.cardvault.security.crypto.ForegroundDekSession
+import com.pdh.cardvault.security.crypto.EncryptedVaultFolderRecord
+import com.pdh.cardvault.security.crypto.VaultFolderCollection
+import com.pdh.cardvault.security.crypto.VaultFolderPayload
+import com.pdh.cardvault.security.crypto.VaultFolderRecordCryptor
 import com.pdh.cardvault.security.crypto.KekManager
 import com.pdh.cardvault.security.crypto.VaultCryptoException
 import com.pdh.cardvault.security.crypto.VaultKeyUnavailableException
@@ -27,6 +31,7 @@ import kotlinx.coroutines.withContext
 internal class EncryptedRoomBankCardRepository(
     private val cardDao: CardDao,
     private val addressDao: AddressDao,
+    private val folderDao: VaultFolderDao,
     private val metadataDao: VaultMetadataDao,
     private val syncStateDao: SyncStateDao,
     private val validator: BankCardValidator,
@@ -36,9 +41,10 @@ internal class EncryptedRoomBankCardRepository(
     private val dekWrapper: DekWrapper = DekWrapper(),
     private val cryptor: CardRecordCryptor = CardRecordCryptor(),
     private val addressCryptor: AddressRecordCryptor = AddressRecordCryptor(),
+    private val folderCryptor: VaultFolderRecordCryptor = VaultFolderRecordCryptor(),
     private val dekSession: ForegroundDekSession = ForegroundDekSession(),
     private val clock: () -> Long = System::currentTimeMillis,
-) : PersistentBankCardRepository, PersistentAddressRepository {
+) : PersistentBankCardRepository, PersistentAddressRepository, PersistentVaultFolderRepository {
     private val lifecycleLock = Any()
     private var lifecycleGeneration = 0L
 
@@ -143,7 +149,13 @@ internal class EncryptedRoomBankCardRepository(
             val normalized = validator.requireValid(input)
             dekSession.useSuspending { dek ->
                 val localDeviceId = requireLocalDeviceId()
-                val encrypted = cryptor.encrypt(id, normalized.toPayload(), dek)
+                val existing = cardDao.getById(id.toString()) ?: return@useSuspending false
+                val retainedFolderId = normalized.folderId ?: existing.decryptPayload(dek).folderId
+                val encrypted = cryptor.encrypt(
+                    id,
+                    normalized.copy(folderId = retainedFolderId).toPayload(),
+                    dek,
+                )
                 cardDao.updateEncryptedPayloadAtomically(
                     id = id.toString(),
                     ciphertext = encrypted.ciphertextCopy(),
@@ -227,7 +239,13 @@ internal class EncryptedRoomBankCardRepository(
         withContext(Dispatchers.Default) {
             val normalized = addressValidator.requireValid(input)
             dekSession.useSuspending { dek ->
-                val encrypted = addressCryptor.encrypt(id, normalized.toAddressPayload(), dek)
+                val existing = addressDao.getById(id.toString()) ?: return@useSuspending false
+                val retainedFolderId = normalized.folderId ?: existing.decryptAddressPayload(dek).folderId
+                val encrypted = addressCryptor.encrypt(
+                    id,
+                    normalized.copy(folderId = retainedFolderId).toAddressPayload(),
+                    dek,
+                )
                 addressDao.updateEncryptedPayloadAtomically(
                     id = id.toString(),
                     ciphertext = encrypted.ciphertextCopy(),
@@ -264,6 +282,135 @@ internal class EncryptedRoomBankCardRepository(
         }
     }
 
+    override suspend fun getFolders(kind: VaultFolderKind): List<PersistentVaultFolder> = storageOperation {
+        withContext(Dispatchers.Default) {
+            dekSession.useSuspending { dek ->
+                val folders = folderDao.getAll().mapNotNull { entity ->
+                    val payload = entity.decryptFolderPayload(dek)
+                    val payloadKind = payload.collection.toFolderKind()
+                    if (payloadKind == kind) {
+                        PersistentVaultFolder(UUID.fromString(entity.id), payload.name, payloadKind)
+                    } else null
+                }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+                val order = normalizedFolderOrder(kind, folders.map(PersistentVaultFolder::id))
+                val byId = folders.associateBy(PersistentVaultFolder::id)
+                order.mapNotNull { id -> id?.let(byId::get) }
+            }
+        }
+    }
+
+    override suspend fun getFolderOrder(kind: VaultFolderKind): List<UUID?> = storageOperation {
+        withContext(Dispatchers.Default) {
+            dekSession.useSuspending { dek ->
+                val ids = folderDao.getAll().mapNotNull { entity ->
+                    val payload = entity.decryptFolderPayload(dek)
+                    entity.id.takeIf { payload.collection.toFolderKind() == kind }?.let(UUID::fromString)
+                }
+                normalizedFolderOrder(kind, ids)
+            }
+        }
+    }
+
+    override suspend fun reorderFolders(kind: VaultFolderKind, orderedIds: List<UUID?>) = storageOperation {
+        withContext(Dispatchers.Default) {
+            dekSession.useSuspending { dek ->
+                val currentIds = folderDao.getAll().mapNotNull { entity ->
+                    val payload = entity.decryptFolderPayload(dek)
+                    entity.id.takeIf { payload.collection.toFolderKind() == kind }?.let(UUID::fromString)
+                }
+                requireValidFolderOrder(orderedIds, currentIds)
+                folderDao.upsertDisplayOrder(
+                    VaultFolderDisplayOrderEntity(kind.name, encodeFolderOrder(orderedIds)),
+                )
+            }
+        }
+    }
+
+    override suspend fun createFolder(kind: VaultFolderKind, name: String): UUID = storageOperation {
+        withContext(Dispatchers.Default) {
+            val normalizedName = requireValidFolderName(name)
+            dekSession.useSuspending { dek ->
+                val id = UUID.randomUUID()
+                val now = clock().coerceAtLeast(0L)
+                val encrypted = folderCryptor.encrypt(
+                    id,
+                    VaultFolderPayload(kind.toFolderCollection(), normalizedName),
+                    dek,
+                )
+                folderDao.insertLocal(
+                    VaultFolderEntity(
+                        id = id.toString(),
+                        ciphertext = encrypted.ciphertextCopy(),
+                        recordIv = encrypted.recordIvCopy(),
+                        payloadSchemaVersion = encrypted.payloadSchemaVersion,
+                        cryptoVersion = encrypted.cryptoVersion,
+                        createdAt = now,
+                        updatedAt = now,
+                        versionVector = ByteArray(0),
+                    ),
+                    requireLocalDeviceId(),
+                )
+                id
+            }
+        }
+    }
+
+    override suspend fun renameFolder(id: UUID, name: String): Boolean = storageOperation {
+        withContext(Dispatchers.Default) {
+            val normalizedName = requireValidFolderName(name)
+            dekSession.useSuspending { dek ->
+                val existing = folderDao.getById(id.toString()) ?: return@useSuspending false
+                val payload = existing.decryptFolderPayload(dek)
+                val encrypted = folderCryptor.encrypt(id, payload.copy(name = normalizedName), dek)
+                folderDao.updateLocal(
+                    id.toString(), encrypted.ciphertextCopy(), encrypted.recordIvCopy(),
+                    encrypted.payloadSchemaVersion, encrypted.cryptoVersion, clock(), requireLocalDeviceId(),
+                )
+            }
+        }
+    }
+
+    override suspend fun deleteFolder(id: UUID): Boolean = storageOperation {
+        withContext(Dispatchers.Default) {
+            dekSession.useSuspending { dek ->
+                val existing = folderDao.getById(id.toString()) ?: return@useSuspending false
+                val kind = existing.decryptFolderPayload(dek).collection
+                if (kind == VaultFolderCollection.CARDS) {
+                    cardDao.getAll().forEach { entity ->
+                        val payload = entity.decryptPayload(dek)
+                        if (payload.folderId == id.toString()) updateCardFolder(entity, payload, null, dek)
+                    }
+                } else {
+                    addressDao.getAll().forEach { entity ->
+                        val payload = entity.decryptAddressPayload(dek)
+                        if (payload.folderId == id.toString()) updateAddressFolder(entity, payload, null, dek)
+                    }
+                }
+                folderDao.deleteLocal(id.toString(), requireLocalDeviceId(), clock())
+            }
+        }
+    }
+
+    override suspend fun moveCardToFolder(cardId: UUID, folderId: UUID?): Boolean = storageOperation {
+        withContext(Dispatchers.Default) {
+            dekSession.useSuspending { dek ->
+                requireFolderKind(folderId, VaultFolderCollection.CARDS, dek)
+                val entity = cardDao.getById(cardId.toString()) ?: return@useSuspending false
+                updateCardFolder(entity, entity.decryptPayload(dek), folderId, dek)
+            }
+        }
+    }
+
+    override suspend fun moveAddressToFolder(addressId: UUID, folderId: UUID?): Boolean = storageOperation {
+        withContext(Dispatchers.Default) {
+            dekSession.useSuspending { dek ->
+                requireFolderKind(folderId, VaultFolderCollection.ADDRESSES, dek)
+                val entity = addressDao.getById(addressId.toString()) ?: return@useSuspending false
+                updateAddressFolder(entity, entity.decryptAddressPayload(dek), folderId, dek)
+            }
+        }
+    }
+
     /**
      * Provides a short-lived copy of the local DEK to the Android sync coordinator.
      *
@@ -279,7 +426,7 @@ internal class EncryptedRoomBankCardRepository(
     }
 
     private suspend fun createInitialVault(): ByteArray {
-        if (cardDao.count() != 0 || addressDao.count() != 0) {
+        if (cardDao.count() != 0 || addressDao.count() != 0 || folderDao.getAll().isNotEmpty()) {
             throw VaultKeyUnavailableException()
         }
         val kek = kekManager.createOrGetForNewVault()
@@ -385,6 +532,18 @@ internal class EncryptedRoomBankCardRepository(
         return addressCryptor.decrypt(recordId, encrypted, dek)
     }
 
+    private fun VaultFolderEntity.decryptFolderPayload(dek: ByteArray): VaultFolderPayload {
+        val recordId = try { UUID.fromString(id) } catch (_: IllegalArgumentException) {
+            throw VaultKeyUnavailableException()
+        }
+        val encrypted = try {
+            EncryptedVaultFolderRecord(payloadSchemaVersion, cryptoVersion, ciphertext, recordIv)
+        } catch (_: IllegalArgumentException) {
+            throw VaultKeyUnavailableException()
+        }
+        return folderCryptor.decrypt(recordId, encrypted, dek)
+    }
+
     private fun BankCardInput.toPayload(): CardPayload = CardPayload(
         nickname = nickname,
         issuerName = issuerName,
@@ -395,6 +554,7 @@ internal class EncryptedRoomBankCardRepository(
         cvv = cvv.takeIf { saveCvv },
         cardTemplateId = cardTemplateId,
         notes = notes,
+        folderId = folderId,
     )
 
     private fun AddressInput.toAddressPayload(): AddressPayload = AddressPayload(
@@ -405,6 +565,7 @@ internal class EncryptedRoomBankCardRepository(
         postalCode = postalCode,
         country = country,
         cardTemplateId = cardTemplateId,
+        folderId = folderId,
     )
 
     private fun AddressPayload.toListItem(entity: AddressEntity): PersistentAddressListItem =
@@ -412,6 +573,7 @@ internal class EncryptedRoomBankCardRepository(
             id = UUID.fromString(entity.id),
             nickname = nickname,
             cardTemplateId = cardTemplateId,
+            folderId = folderId?.let(UUID::fromString),
         )
 
     private fun AddressPayload.toDetail(): PersistentAddressDetail = PersistentAddressDetail(
@@ -422,6 +584,7 @@ internal class EncryptedRoomBankCardRepository(
         postalCode = postalCode,
         country = country,
         cardTemplateId = cardTemplateId,
+        folderId = folderId?.let(UUID::fromString),
     )
 
     private fun AddressPayload.toAddressInput(): AddressInput = AddressInput(
@@ -432,6 +595,7 @@ internal class EncryptedRoomBankCardRepository(
         postalCode = postalCode,
         country = country,
         cardTemplateId = cardTemplateId,
+        folderId = folderId,
     )
 
     private fun CardPayload.toInput(): BankCardInput = BankCardInput(
@@ -444,6 +608,7 @@ internal class EncryptedRoomBankCardRepository(
         cvv = cvv.takeIf { saveCvv },
         cardTemplateId = cardTemplateId,
         notes = notes,
+        folderId = folderId,
     )
 
     private fun CardPayload.toListItem(entity: CardEntity): PersistentCardListItem =
@@ -453,6 +618,7 @@ internal class EncryptedRoomBankCardRepository(
             issuerName = issuerName,
             cardTemplateId = cardTemplateId,
             cardNetwork = CardNetworkDetector.detect(cardNumber),
+            folderId = folderId?.let(UUID::fromString),
         )
 
     private fun CardPayload.toMaskedDetail(): PersistentCardDetail = PersistentCardDetail(
@@ -463,6 +629,7 @@ internal class EncryptedRoomBankCardRepository(
         notes = notes,
         cvvSaved = saveCvv,
         cardNetwork = CardNetworkDetector.detect(cardNumber),
+        folderId = folderId?.let(UUID::fromString),
     )
 
     private fun CardPayload.maskedCardNumber(): String =
@@ -508,6 +675,115 @@ internal class EncryptedRoomBankCardRepository(
         }
     }
 
+    private suspend fun requireFolderKind(
+        folderId: UUID?,
+        expected: VaultFolderCollection,
+        dek: ByteArray,
+    ) {
+        if (folderId == null) return
+        val folder = folderDao.getById(folderId.toString()) ?: throw IllegalArgumentException("Unknown folder.")
+        if (folder.decryptFolderPayload(dek).collection != expected) {
+            throw IllegalArgumentException("Wrong folder type.")
+        }
+    }
+
+    private suspend fun updateCardFolder(
+        entity: CardEntity,
+        payload: CardPayload,
+        folderId: UUID?,
+        dek: ByteArray,
+    ): Boolean {
+        if (payload.folderId == folderId?.toString()) return true
+        val id = UUID.fromString(entity.id)
+        val encrypted = cryptor.encrypt(id, payload.copy(folderId = folderId?.toString()), dek)
+        return cardDao.updateEncryptedPayloadAtomically(
+            entity.id, encrypted.ciphertextCopy(), encrypted.recordIvCopy(),
+            encrypted.payloadSchemaVersion, encrypted.cryptoVersion, clock(), requireLocalDeviceId(),
+        ) != null
+    }
+
+    private suspend fun updateAddressFolder(
+        entity: AddressEntity,
+        payload: AddressPayload,
+        folderId: UUID?,
+        dek: ByteArray,
+    ): Boolean {
+        if (payload.folderId == folderId?.toString()) return true
+        val id = UUID.fromString(entity.id)
+        val encrypted = addressCryptor.encrypt(id, payload.copy(folderId = folderId?.toString()), dek)
+        return addressDao.updateEncryptedPayloadAtomically(
+            entity.id, encrypted.ciphertextCopy(), encrypted.recordIvCopy(),
+            encrypted.payloadSchemaVersion, encrypted.cryptoVersion, clock(), requireLocalDeviceId(),
+        ) != null
+    }
+
+    private fun requireValidFolderName(value: String): String {
+        val normalized = value.trim()
+        require(normalized.codePointCount(0, normalized.length) in 1..50) { "Invalid folder name." }
+        return normalized
+    }
+
+    private fun VaultFolderKind.toFolderCollection(): VaultFolderCollection = when (this) {
+        VaultFolderKind.CARDS -> VaultFolderCollection.CARDS
+        VaultFolderKind.ADDRESSES -> VaultFolderCollection.ADDRESSES
+    }
+
+    private suspend fun normalizedFolderOrder(
+        kind: VaultFolderKind,
+        folderIds: List<UUID>,
+    ): List<UUID?> {
+        val validIds = folderIds.toSet()
+        val stored = folderDao.getDisplayOrder(kind.name)
+            ?.orderedEntries
+            ?.let(::decodeFolderOrder)
+            .orEmpty()
+        val normalized = buildList<UUID?> {
+            val seen = mutableSetOf<UUID?>()
+            stored.forEach { id ->
+                if ((id == null || id in validIds) && seen.add(id)) add(id)
+            }
+            if (seen.add(null)) add(0, null)
+            folderIds.forEach { id -> if (seen.add(id)) add(id) }
+        }
+        if (stored != normalized) {
+            folderDao.upsertDisplayOrder(
+                VaultFolderDisplayOrderEntity(kind.name, encodeFolderOrder(normalized)),
+            )
+        }
+        return normalized
+    }
+
+    private fun requireValidFolderOrder(orderedIds: List<UUID?>, folderIds: List<UUID>) {
+        require(orderedIds.size == folderIds.size + 1) { "Invalid folder order." }
+        require(orderedIds.count { it == null } == 1) { "Invalid folder order." }
+        require(orderedIds.filterNotNull().toSet() == folderIds.toSet()) { "Invalid folder order." }
+        require(orderedIds.filterNotNull().distinct().size == folderIds.size) { "Invalid folder order." }
+    }
+
+    private fun encodeFolderOrder(orderedIds: List<UUID?>): String =
+        orderedIds.joinToString(FOLDER_ORDER_SEPARATOR) { it?.toString() ?: UNFILED_ORDER_TOKEN }
+
+    private fun decodeFolderOrder(encoded: String): List<UUID?> =
+        encoded.split(FOLDER_ORDER_SEPARATOR).mapNotNull { token ->
+            if (token == UNFILED_ORDER_TOKEN) FolderOrderToken.Unfiled
+            else runCatching { FolderOrderToken.Folder(UUID.fromString(token)) }.getOrNull()
+        }.map { token ->
+            when (token) {
+                FolderOrderToken.Unfiled -> null
+                is FolderOrderToken.Folder -> token.id
+            }
+        }
+
+    private sealed interface FolderOrderToken {
+        data object Unfiled : FolderOrderToken
+        data class Folder(val id: UUID) : FolderOrderToken
+    }
+
+    private fun VaultFolderCollection.toFolderKind(): VaultFolderKind = when (this) {
+        VaultFolderCollection.CARDS -> VaultFolderKind.CARDS
+        VaultFolderCollection.ADDRESSES -> VaultFolderKind.ADDRESSES
+    }
+
     private fun currentLifecycleGeneration(): Long = synchronized(lifecycleLock) {
         lifecycleGeneration
     }
@@ -523,6 +799,7 @@ internal class EncryptedRoomBankCardRepository(
         ): EncryptedRoomBankCardRepository = EncryptedRoomBankCardRepository(
             cardDao = database.cardDao(),
             addressDao = database.addressDao(),
+            folderDao = database.vaultFolderDao(),
             metadataDao = database.vaultMetadataDao(),
             syncStateDao = database.syncStateDao(),
             validator = validator,
@@ -545,3 +822,6 @@ private suspend fun <T> storageOperation(block: suspend () -> T): T = try {
 } catch (_: RuntimeException) {
     throw VaultStorageException()
 }
+
+private const val FOLDER_ORDER_SEPARATOR = "\n"
+private const val UNFILED_ORDER_TOKEN = "@unfiled"

@@ -16,7 +16,7 @@ plugins {
 }
 
 group = "com.pdh.cardvault"
-version = "1.4.0"
+version = "1.5.6"
 
 val generatedWindowsIcon = layout.buildDirectory.file("generated/cardvault/cardvault.ico")
 val generateWindowsIcon = tasks.register("generateWindowsIcon") {
@@ -85,10 +85,13 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "com.pdh.cardvault.desktop.MainKt"
+        buildTypes.release.proguard {
+            configurationFiles.from(project.file("proguard-rules.pro"))
+        }
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi)
             packageName = "CardVault"
-            packageVersion = "1.4.0"
+            packageVersion = "1.5.6"
             description = "CardVault offline encrypted card and address wallet"
             vendor = "pdh"
             windows {
@@ -121,7 +124,9 @@ val createCompatibleRuntimeImage = tasks.register<Exec>("createCompatibleRuntime
         }
         commandLine(
             jlink.absolutePath,
-            "--add-modules", "java.base,java.desktop,java.logging,jdk.crypto.ec",
+            // JNA discovers sun.misc.Unsafe reflectively. Keep jdk.unsupported in the
+            // packaged runtime so Windows DPAPI behaves like it does under the full test JDK.
+            "--add-modules", "java.base,java.desktop,java.logging,jdk.crypto.ec,jdk.unsupported",
             "--strip-debug",
             "--no-header-files",
             "--no-man-pages",

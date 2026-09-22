@@ -8,6 +8,7 @@ data class AddressInput(
     val postalCode: String,
     val country: String,
     val cardTemplateId: String,
+    val folderId: String? = null,
 ) {
     override fun toString(): String = "AddressInput(sensitiveFields=redacted)"
 }

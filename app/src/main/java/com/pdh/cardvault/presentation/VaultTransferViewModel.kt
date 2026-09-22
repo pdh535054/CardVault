@@ -164,10 +164,10 @@ class VaultTransferViewModel internal constructor(
     }
 
     fun requestExport() {
-        requestExport(ExportMode.Automatic)
-    }
-
-    fun requestNewDevicePairing() {
+        // Manual transfer through WeChat/QQ must also work when the destination has
+        // never been paired (or has been reinstalled). Always create a self-contained
+        // pairing package for the primary action so users cannot accidentally send a
+        // .cvsync file that a fresh destination is unable to decrypt.
         requestExport(ExportMode.Pairing)
     }
 
@@ -238,7 +238,7 @@ class VaultTransferViewModel internal constructor(
         if (!_uiState.value.importNeedsPairingCode || _uiState.value.busy) return
         val normalized = value.uppercase()
             .filter { character ->
-                character in 'A'..'Z' || character in '2'..'7' ||
+                character in 'A'..'Z' || character in '1'..'7' ||
                     character == '-' || character.isWhitespace()
             }
             .take(MAX_PAIRING_CODE_INPUT)
@@ -350,6 +350,27 @@ class VaultTransferViewModel internal constructor(
         }
     }
 
+    fun copyPreparedPairingCode(copyText: (String) -> Boolean) {
+        val code = _uiState.value.pairingCode ?: return
+        val copied = runCatching { copyText(code) }.getOrDefault(false)
+        _uiState.update { current ->
+            current.copy(
+                message = VaultTransferMessage(
+                    text = if (copied) {
+                        "配对码已复制，剪贴板将在 30 秒后自动清除"
+                    } else {
+                        "无法复制配对码，请稍后重试"
+                    },
+                    kind = if (copied) {
+                        VaultTransferMessageKind.Success
+                    } else {
+                        VaultTransferMessageKind.Error
+                    },
+                ),
+            )
+        }
+    }
+
     fun onShareDispatchFailed() {
         if (preparedFile == null) return
         showError("无法打开系统分享，请稍后重试")
@@ -369,7 +390,7 @@ class VaultTransferViewModel internal constructor(
                 fileBytes = exported.fileBytesCopy()
                 fileName = exported.fileName
                 pairingCode = exported.displayCode
-            } else if (status.isPaired && mode != ExportMode.Pairing) {
+            } else if (status.isPaired && mode == ExportMode.Automatic) {
                 val exported = operations.exportSync()
                 fileBytes = exported.fileBytesCopy()
                 fileName = exported.fileName

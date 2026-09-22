@@ -30,8 +30,8 @@ android {
         // API 37 Platform is not installed and downloading SDK components is out of scope.
         //noinspection OldTargetApi
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.4.0"
+        versionCode = 21
+        versionName = "1.5.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

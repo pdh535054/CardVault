@@ -16,6 +16,9 @@ import com.pdh.cardvault.data.room.SyncSourceLimitException
 import com.pdh.cardvault.data.room.SyncStateDao
 import com.pdh.cardvault.data.room.SyncTombstoneEntity
 import com.pdh.cardvault.data.room.SyncVaultStateEntity
+import com.pdh.cardvault.data.room.VaultFolderDao
+import com.pdh.cardvault.data.room.VaultFolderEntity
+import com.pdh.cardvault.data.room.FolderSyncTombstoneEntity
 import com.pdh.cardvault.domain.model.BankCardInput
 import com.pdh.cardvault.domain.model.AddressInput
 import com.pdh.cardvault.domain.validation.BankCardValidator
@@ -27,6 +30,10 @@ import com.pdh.cardvault.security.crypto.EncryptedAddressRecord
 import com.pdh.cardvault.security.crypto.CardPayload
 import com.pdh.cardvault.security.crypto.CardRecordCryptor
 import com.pdh.cardvault.security.crypto.EncryptedCardRecord
+import com.pdh.cardvault.security.crypto.EncryptedVaultFolderRecord
+import com.pdh.cardvault.security.crypto.VaultFolderCollection
+import com.pdh.cardvault.security.crypto.VaultFolderPayload
+import com.pdh.cardvault.security.crypto.VaultFolderRecordCryptor
 import com.pdh.cardvault.sync.CardSyncPayload
 import com.pdh.cardvault.sync.AddressSyncPayload
 import com.pdh.cardvault.sync.AddressSyncRecord
@@ -48,6 +55,11 @@ import com.pdh.cardvault.sync.SyncProtocolException
 import com.pdh.cardvault.sync.SyncRecord
 import com.pdh.cardvault.sync.SyncRecordValue
 import com.pdh.cardvault.sync.SyncSnapshot
+import com.pdh.cardvault.sync.FolderCollectionKind
+import com.pdh.cardvault.sync.FolderSyncPayload
+import com.pdh.cardvault.sync.FolderSyncRecord
+import com.pdh.cardvault.sync.FolderSyncRecordValue
+import com.pdh.cardvault.sync.FolderSyncSnapshot
 import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -110,12 +122,14 @@ internal class SyncNotPairedException : IllegalStateException(
 internal class AndroidVaultSyncCoordinator(
     private val cardDao: CardDao,
     private val addressDao: AddressDao,
+    private val folderDao: VaultFolderDao,
     private val syncStateDao: SyncStateDao,
     private val repository: EncryptedRoomBankCardRepository,
     private val validator: BankCardValidator,
     private val addressValidator: AddressValidator,
     private val recordCryptor: CardRecordCryptor = CardRecordCryptor(),
     private val addressRecordCryptor: AddressRecordCryptor = AddressRecordCryptor(),
+    private val folderRecordCryptor: VaultFolderRecordCryptor = VaultFolderRecordCryptor(),
     private val syncKeyCryptor: SyncKeyCryptor = SyncKeyCryptor(),
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -308,6 +322,7 @@ internal class AndroidVaultSyncCoordinator(
                             packageId = payload.packageId,
                             sourceDeviceId = payload.sourceDeviceId,
                             exportSequence = payload.exportSequence,
+                            resetReplayHistory = currentState.vaultId != payload.vaultId,
                         )
                     } finally {
                         importedSyncKey.fill(0)
@@ -481,6 +496,26 @@ internal class AndroidVaultSyncCoordinator(
         }
         val addressOrder = syncStateDao.getAddressOrderState()
             ?: throw DatabaseInvariantException()
+        val folders = folderDao.getAll().map { entity ->
+            val id = canonicalUuid(entity.id)
+            FolderSyncRecord(
+                recordId = entity.id,
+                version = StoredVersionVectors.decode(entity.versionVector),
+                value = FolderSyncRecordValue.Active(
+                    payload = decryptFolderPayload(entity, id, localDek).toSyncPayload(),
+                    createdAtEpochMillis = entity.createdAt,
+                    updatedAtEpochMillis = entity.updatedAt,
+                ),
+            )
+        }
+        val folderTombstones = syncStateDao.getFolderTombstones().map { entity ->
+            canonicalUuid(entity.recordId)
+            FolderSyncRecord(
+                recordId = entity.recordId,
+                version = StoredVersionVectors.decode(entity.versionVector),
+                value = FolderSyncRecordValue.Tombstone(entity.deletedAt),
+            )
+        }
         return SyncSnapshot(
             records = active + tombstones,
             order = SyncOrder(
@@ -496,6 +531,7 @@ internal class AndroidVaultSyncCoordinator(
                     recordIds = addresses.map(AddressEntity::id),
                 ),
             ),
+            folders = FolderSyncSnapshot(folders + folderTombstones),
         )
     }
 
@@ -506,6 +542,7 @@ internal class AndroidVaultSyncCoordinator(
         packageId: String,
         sourceDeviceId: String,
         exportSequence: Long,
+        resetReplayHistory: Boolean = false,
     ) {
         val recordsById = snapshot.records.associateBy(SyncRecord::recordId)
         val cards = snapshot.order.recordIds.mapIndexed { sortOrder, recordId ->
@@ -565,6 +602,30 @@ internal class AndroidVaultSyncCoordinator(
                 deletedAt = value.deletedAtEpochMillis,
             )
         }
+        val folderSnapshot = snapshot.folders ?: FolderSyncSnapshot(emptyList())
+        val folders = folderSnapshot.records.mapNotNull { record ->
+            val value = record.value as? FolderSyncRecordValue.Active ?: return@mapNotNull null
+            val id = canonicalUuid(record.recordId)
+            val encrypted = folderRecordCryptor.encrypt(id, value.payload.toLocalPayload(), localDek)
+            VaultFolderEntity(
+                id = record.recordId,
+                ciphertext = encrypted.ciphertextCopy(),
+                recordIv = encrypted.recordIvCopy(),
+                payloadSchemaVersion = encrypted.payloadSchemaVersion,
+                cryptoVersion = encrypted.cryptoVersion,
+                createdAt = value.createdAtEpochMillis,
+                updatedAt = value.updatedAtEpochMillis,
+                versionVector = StoredVersionVectors.encode(record.version),
+            )
+        }
+        val folderTombstones = folderSnapshot.records.mapNotNull { record ->
+            val value = record.value as? FolderSyncRecordValue.Tombstone ?: return@mapNotNull null
+            FolderSyncTombstoneEntity(
+                recordId = record.recordId,
+                versionVector = StoredVersionVectors.encode(record.version),
+                deletedAt = value.deletedAtEpochMillis,
+            )
+        }
         try {
             syncStateDao.replaceSnapshotAtomically(
                 cards = cards,
@@ -579,6 +640,8 @@ internal class AndroidVaultSyncCoordinator(
                     versionVector = StoredVersionVectors.encode(addressSnapshot.order.version),
                     updatedAt = addressSnapshot.order.updatedAtEpochMillis,
                 ),
+                folders = folders,
+                folderTombstones = folderTombstones,
                 vaultState = vaultState,
                 importedPackage = ImportedSyncPackageEntity(
                     packageId = packageId,
@@ -586,6 +649,7 @@ internal class AndroidVaultSyncCoordinator(
                     exportSequence = exportSequence,
                     importedAt = now(),
                 ),
+                resetReplayHistory = resetReplayHistory,
             )
         } catch (_: DuplicateSyncPackageException) {
             throw SyncProtocolException(SyncErrorCode.REPLAYED_PACKAGE)
@@ -606,11 +670,13 @@ internal class AndroidVaultSyncCoordinator(
             throw SyncProtocolException(SyncErrorCode.REPLAYED_PACKAGE)
         }
         val paired = state.encryptedSyncKey != null && state.syncKeyIv != null
-        if (paired && allowNewerKeyEpoch && descriptor.keyEpoch < state.keyEpoch) {
+        val sameVault = descriptor.vaultId == state.vaultId
+        if (paired && sameVault && allowNewerKeyEpoch && descriptor.keyEpoch < state.keyEpoch) {
             throw SyncProtocolException(SyncErrorCode.STALE_PACKAGE)
         }
-        val recent = syncStateDao.getRecentImportedPackages()
-        val highest = syncStateDao.maxImportedSequence(descriptor.sourceDeviceId)
+        val switchesVault = allowUnpairedVaultChange && !sameVault
+        val recent = if (switchesVault) emptyList() else syncStateDao.getRecentImportedPackages()
+        val highest = if (switchesVault) null else syncStateDao.maxImportedSequence(descriptor.sourceDeviceId)
         ReplayProtector.accept(
             metadata = ReplayMetadata(
                 recentPackageIds = recent.map(ImportedSyncPackageEntity::packageId),
@@ -619,9 +685,9 @@ internal class AndroidVaultSyncCoordinator(
                 }.orEmpty(),
             ),
             descriptor = descriptor,
-            expectedVaultId = state.vaultId.takeIf { paired || !allowUnpairedVaultChange },
+            expectedVaultId = state.vaultId.takeIf { !allowUnpairedVaultChange },
             expectedKeyEpoch = state.keyEpoch.takeIf {
-                (paired || !allowUnpairedVaultChange) &&
+                !allowUnpairedVaultChange &&
                     !(allowNewerKeyEpoch && paired && descriptor.keyEpoch > state.keyEpoch)
             },
         )
@@ -696,7 +762,23 @@ internal class AndroidVaultSyncCoordinator(
         dek = localDek,
     )
 
+    private fun decryptFolderPayload(
+        entity: VaultFolderEntity,
+        recordId: UUID,
+        localDek: ByteArray,
+    ): VaultFolderPayload = folderRecordCryptor.decrypt(
+        recordId,
+        EncryptedVaultFolderRecord(
+            entity.payloadSchemaVersion,
+            entity.cryptoVersion,
+            entity.ciphertext,
+            entity.recordIv,
+        ),
+        localDek,
+    )
+
     private fun CardPayload.toSyncPayload(): CardSyncPayload = CardSyncPayload(
+        schemaVersion = 2,
         nickname = nickname,
         issuerName = issuerName,
         cardNumber = cardNumber,
@@ -706,6 +788,7 @@ internal class AndroidVaultSyncCoordinator(
         cvv = cvv.takeIf { saveCvv },
         cardTemplateId = cardTemplateId,
         notes = notes,
+        folderId = folderId,
     )
 
     private fun CardSyncPayload.toInput(): BankCardInput = BankCardInput(
@@ -718,6 +801,7 @@ internal class AndroidVaultSyncCoordinator(
         cvv = cvv.takeIf { saveCvv },
         cardTemplateId = cardTemplateId,
         notes = notes,
+        folderId = folderId,
     )
 
     private fun BankCardInput.toCardPayload(): CardPayload = CardPayload(
@@ -730,9 +814,11 @@ internal class AndroidVaultSyncCoordinator(
         cvv = cvv.takeIf { saveCvv },
         cardTemplateId = cardTemplateId,
         notes = notes,
+        folderId = folderId,
     )
 
     private fun AddressPayload.toSyncPayload(): AddressSyncPayload = AddressSyncPayload(
+        schemaVersion = 2,
         nickname = nickname,
         detailedAddress = detailedAddress,
         city = city,
@@ -740,6 +826,7 @@ internal class AndroidVaultSyncCoordinator(
         postalCode = postalCode,
         country = country,
         cardTemplateId = cardTemplateId,
+        folderId = folderId,
     )
 
     private fun AddressSyncPayload.toInput(): AddressInput = AddressInput(
@@ -750,6 +837,7 @@ internal class AndroidVaultSyncCoordinator(
         postalCode = postalCode,
         country = country,
         cardTemplateId = cardTemplateId,
+        folderId = folderId,
     )
 
     /**
@@ -775,6 +863,23 @@ internal class AndroidVaultSyncCoordinator(
         postalCode = postalCode,
         country = country,
         cardTemplateId = cardTemplateId,
+        folderId = folderId,
+    )
+
+    private fun VaultFolderPayload.toSyncPayload(): FolderSyncPayload = FolderSyncPayload(
+        collection = when (collection) {
+            VaultFolderCollection.CARDS -> FolderCollectionKind.CARDS
+            VaultFolderCollection.ADDRESSES -> FolderCollectionKind.ADDRESSES
+        },
+        name = name,
+    )
+
+    private fun FolderSyncPayload.toLocalPayload(): VaultFolderPayload = VaultFolderPayload(
+        collection = when (collection) {
+            FolderCollectionKind.CARDS -> VaultFolderCollection.CARDS
+            FolderCollectionKind.ADDRESSES -> VaultFolderCollection.ADDRESSES
+        },
+        name = name,
     )
 
     private fun SyncSnapshot.toSummary(
@@ -831,7 +936,7 @@ internal class AndroidVaultSyncCoordinator(
     override fun toString(): String = "AndroidVaultSyncCoordinator(contents=redacted)"
 
     private companion object {
-        const val DEFAULT_PAIRING_VALIDITY_MILLIS = 30L * 60L * 1000L
-        const val MAX_PAIRING_VALIDITY_MILLIS = 24L * 60L * 60L * 1000L
+        const val DEFAULT_PAIRING_VALIDITY_MILLIS = 7L * 24L * 60L * 60L * 1000L
+        const val MAX_PAIRING_VALIDITY_MILLIS = 7L * 24L * 60L * 60L * 1000L
     }
 }

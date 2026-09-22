@@ -62,6 +62,41 @@ internal data class AddressEntity(
     }
 }
 
+@Entity(tableName = VaultFolderEntity.TABLE_NAME)
+internal data class VaultFolderEntity(
+    @PrimaryKey @ColumnInfo(name = "id") val id: String,
+    @ColumnInfo(name = "ciphertext", typeAffinity = ColumnInfo.BLOB) val ciphertext: ByteArray,
+    @ColumnInfo(name = "recordIv", typeAffinity = ColumnInfo.BLOB) val recordIv: ByteArray,
+    @ColumnInfo(name = "payloadSchemaVersion") val payloadSchemaVersion: Int,
+    @ColumnInfo(name = "cryptoVersion") val cryptoVersion: Int,
+    @ColumnInfo(name = "createdAt") val createdAt: Long,
+    @ColumnInfo(name = "updatedAt") val updatedAt: Long,
+    @ColumnInfo(name = "versionVector", typeAffinity = ColumnInfo.BLOB) val versionVector: ByteArray,
+) {
+    override fun toString(): String = "VaultFolderEntity(metadata=redacted)"
+    companion object { const val TABLE_NAME = "vault_folders" }
+}
+
+@Entity(tableName = VaultFolderDisplayOrderEntity.TABLE_NAME)
+internal data class VaultFolderDisplayOrderEntity(
+    @PrimaryKey @ColumnInfo(name = "collection") val collection: String,
+    @ColumnInfo(name = "orderedEntries") val orderedEntries: String,
+) {
+    override fun toString(): String = "VaultFolderDisplayOrderEntity(metadata=redacted)"
+
+    companion object { const val TABLE_NAME = "vault_folder_display_order" }
+}
+
+@Entity(tableName = FolderSyncTombstoneEntity.TABLE_NAME)
+internal data class FolderSyncTombstoneEntity(
+    @PrimaryKey @ColumnInfo(name = "recordId") val recordId: String,
+    @ColumnInfo(name = "versionVector", typeAffinity = ColumnInfo.BLOB) val versionVector: ByteArray,
+    @ColumnInfo(name = "deletedAt") val deletedAt: Long,
+) {
+    override fun toString(): String = "FolderSyncTombstoneEntity(metadata=redacted)"
+    companion object { const val TABLE_NAME = "folder_sync_tombstones" }
+}
+
 @Entity(tableName = AddressSyncOrderStateEntity.TABLE_NAME)
 internal data class AddressSyncOrderStateEntity(
     @PrimaryKey

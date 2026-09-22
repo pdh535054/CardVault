@@ -486,6 +486,34 @@ class EncryptedRoomBankCardRepositoryTest {
     }
 
     @Test
+    fun authenticatedPairingReunifiesTwoIndependentlyPairedInstallations() = runBlocking {
+        val phone = fixture()
+        val desktop = fixture()
+        phone.repository.unlockOrCreateVault()
+        desktop.repository.unlockOrCreateVault()
+        phone.repository.add(validInput(nickname = "Synthetic phone card"))
+        desktop.repository.add(validInput(nickname = "Synthetic desktop card"))
+        val phoneCoordinator = coordinator(phone)
+        val desktopCoordinator = coordinator(desktop)
+        val phonePairing = phoneCoordinator.createPairingExport()
+        desktopCoordinator.createPairingExport()
+
+        desktopCoordinator.importPairing(phonePairing.fileBytesCopy(), phonePairing.displayCode)
+
+        assertEquals(
+            setOf("Synthetic phone card", "Synthetic desktop card"),
+            desktop.repository.getList().map(PersistentCardListItem::nickname).toSet(),
+        )
+        assertEquals(
+            phone.cardDao.syncStateDao.vaultState?.vaultId,
+            desktop.cardDao.syncStateDao.vaultState?.vaultId,
+        )
+        val sync = desktopCoordinator.exportSync()
+        phoneCoordinator.importSync(sync.fileBytesCopy())
+        assertEquals(2, phone.repository.getList().size)
+    }
+
+    @Test
     fun rotatingSyncKeyPreservesSavedCvvRejectsOldSyncAndAllowsNewPairing() = runBlocking {
         val phone = fixture()
         val desktop = fixture()
@@ -547,7 +575,7 @@ class EncryptedRoomBankCardRepositoryTest {
         val sharedSyncSecret = decoded.syncSecret.copyBytes()
         val legacyPayload = decoded.copy(
             syncSecret = SecretBytes(sharedSyncSecret),
-            snapshot = decoded.snapshot.copy(addresses = null),
+            snapshot = decoded.snapshot.copy(addresses = null, folders = null),
         )
         val legacyBytes = try {
             CardVaultSyncFiles.encodePairing(legacyPayload, pairingSecret)
@@ -587,6 +615,8 @@ class EncryptedRoomBankCardRepositoryTest {
                 addresses = emptyList(),
                 addressTombstones = emptyList(),
                 addressOrder = addressOrder,
+                folders = emptyList(),
+                folderTombstones = emptyList(),
                 vaultState = state,
                 importedPackage = ImportedSyncPackageEntity(
                     packageId = UUID.randomUUID().toString(),
@@ -604,6 +634,8 @@ class EncryptedRoomBankCardRepositoryTest {
                 addresses = emptyList(),
                 addressTombstones = emptyList(),
                 addressOrder = addressOrder,
+                folders = emptyList(),
+                folderTombstones = emptyList(),
                 vaultState = state,
                 importedPackage = ImportedSyncPackageEntity(
                     packageId = UUID.randomUUID().toString(),
@@ -618,16 +650,68 @@ class EncryptedRoomBankCardRepositoryTest {
         assertEquals(16, dao.sourceSequences.size)
     }
 
+    @Test
+    fun encryptedFoldersGroupCardsAndAddressesAndDeletionReturnsItemsToRoot() = runBlocking {
+        val fixture = fixture()
+        fixture.repository.unlockOrCreateVault()
+        val cardId = fixture.repository.add(validInput())
+        val addressId = fixture.repository.addAddress(validAddressInput())
+        val cardFolderId = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic cards")
+        val addressFolderId = fixture.repository.createFolder(VaultFolderKind.ADDRESSES, "Synthetic addresses")
+
+        assertTrue(fixture.repository.moveCardToFolder(cardId, cardFolderId))
+        assertTrue(fixture.repository.moveAddressToFolder(addressId, addressFolderId))
+        assertEquals(cardFolderId, fixture.repository.getList().single().folderId)
+        assertEquals(addressFolderId, fixture.repository.getAddressList().single().folderId)
+        assertEquals("Synthetic cards", fixture.repository.getFolders(VaultFolderKind.CARDS).single().name)
+        assertTrue(fixture.repository.renameFolder(cardFolderId, "Renamed cards"))
+        assertEquals("Renamed cards", fixture.repository.getFolders(VaultFolderKind.CARDS).single().name)
+
+        assertTrue(fixture.repository.deleteFolder(cardFolderId))
+        assertTrue(fixture.repository.deleteFolder(addressFolderId))
+        assertEquals(null, fixture.repository.getList().single().folderId)
+        assertEquals(null, fixture.repository.getAddressList().single().folderId)
+        assertTrue(fixture.repository.getFolders(VaultFolderKind.CARDS).isEmpty())
+        assertTrue(fixture.repository.getFolders(VaultFolderKind.ADDRESSES).isEmpty())
+    }
+
+    @Test
+    fun folderDisplayOrderPersistsAndIncludesMovableUnfiledEntry() = runBlocking {
+        val fixture = fixture()
+        fixture.repository.unlockOrCreateVault()
+        val first = fixture.repository.createFolder(VaultFolderKind.CARDS, "First")
+        val second = fixture.repository.createFolder(VaultFolderKind.CARDS, "Second")
+        val third = fixture.repository.createFolder(VaultFolderKind.CARDS, "Third")
+
+        fixture.repository.reorderFolders(
+            VaultFolderKind.CARDS,
+            listOf(third, null, first, second),
+        )
+
+        assertEquals(
+            listOf(third, null, first, second),
+            fixture.repository.getFolderOrder(VaultFolderKind.CARDS),
+        )
+        assertEquals(
+            listOf(third, first, second),
+            fixture.repository.getFolders(VaultFolderKind.CARDS).map(PersistentVaultFolder::id),
+        )
+    }
+
     private fun fixture(): RepositoryFixture {
         val cardDao = FakeCardDao()
         val addressDao = FakeAddressDao()
+        val folderDao = FakeVaultFolderDao()
         val metadataDao = FakeVaultMetadataDao()
         val manager = FakeKekManager()
+        folderDao.syncStateDao = cardDao.syncStateDao
+        cardDao.syncStateDao.folderDao = folderDao
         return RepositoryFixture(
             cardDao = cardDao,
             addressDao = addressDao,
+            folderDao = folderDao,
             metadataDao = metadataDao,
-            repository = repository(cardDao, metadataDao, manager, addressDao),
+            repository = repository(cardDao, metadataDao, manager, addressDao, folderDao),
         )
     }
 
@@ -636,6 +720,7 @@ class EncryptedRoomBankCardRepositoryTest {
     ): AndroidVaultSyncCoordinator = AndroidVaultSyncCoordinator(
         cardDao = fixture.cardDao,
         addressDao = fixture.addressDao,
+        folderDao = fixture.folderDao,
         syncStateDao = fixture.cardDao.syncStateDao,
         repository = fixture.repository,
         validator = BankCardValidator { templateId ->
@@ -651,13 +736,17 @@ class EncryptedRoomBankCardRepositoryTest {
         metadataDao: VaultMetadataDao,
         kekManager: KekManager,
         addressDao: AddressDao = FakeAddressDao(),
+        folderDao: VaultFolderDao = FakeVaultFolderDao(),
     ): EncryptedRoomBankCardRepository {
         val syncStateDao = (cardDao as FakeCardDao).syncStateDao
         (addressDao as FakeAddressDao).syncStateDao = syncStateDao
         syncStateDao.addressDao = addressDao
+        (folderDao as FakeVaultFolderDao).syncStateDao = syncStateDao
+        syncStateDao.folderDao = folderDao
         return EncryptedRoomBankCardRepository(
             cardDao = cardDao,
             addressDao = addressDao,
+            folderDao = folderDao,
             metadataDao = metadataDao,
             syncStateDao = syncStateDao,
             validator = BankCardValidator { templateId ->
@@ -711,6 +800,7 @@ class EncryptedRoomBankCardRepositoryTest {
 private data class RepositoryFixture(
     val cardDao: FakeCardDao,
     val addressDao: FakeAddressDao,
+    val folderDao: FakeVaultFolderDao,
     val metadataDao: FakeVaultMetadataDao,
     val repository: EncryptedRoomBankCardRepository,
 )
@@ -979,14 +1069,79 @@ private class FakeAddressDao : AddressDao() {
     }
 }
 
+private class FakeVaultFolderDao : VaultFolderDao() {
+    private val rows = mutableListOf<VaultFolderEntity>()
+    private val displayOrders = mutableMapOf<String, VaultFolderDisplayOrderEntity>()
+    lateinit var syncStateDao: FakeSyncStateDao
+
+    override suspend fun getAll(): List<VaultFolderEntity> = rows.sortedWith(
+        compareBy<VaultFolderEntity> { it.createdAt }.thenBy { it.id },
+    )
+
+    override suspend fun getById(id: String): VaultFolderEntity? = rows.firstOrNull { it.id == id }
+
+    override suspend fun getDisplayOrder(collection: String): VaultFolderDisplayOrderEntity? =
+        displayOrders[collection]
+
+    override suspend fun upsertDisplayOrder(entity: VaultFolderDisplayOrderEntity) {
+        displayOrders[entity.collection] = entity
+    }
+
+    protected override suspend fun insert(entity: VaultFolderEntity) {
+        check(rows.none { it.id == entity.id })
+        rows += entity
+    }
+
+    protected override suspend fun updateEncryptedPayload(
+        id: String,
+        ciphertext: ByteArray,
+        recordIv: ByteArray,
+        payloadSchemaVersion: Int,
+        cryptoVersion: Int,
+        updatedAt: Long,
+        versionVector: ByteArray,
+    ): Int {
+        val index = rows.indexOfFirst { it.id == id }
+        if (index < 0) return 0
+        rows[index] = rows[index].copy(
+            ciphertext = ciphertext.copyOf(),
+            recordIv = recordIv.copyOf(),
+            payloadSchemaVersion = payloadSchemaVersion,
+            cryptoVersion = cryptoVersion,
+            updatedAt = updatedAt,
+            versionVector = versionVector.copyOf(),
+        )
+        return 1
+    }
+
+    protected override suspend fun deleteById(id: String): Int {
+        val removed = rows.removeAll { it.id == id }
+        return if (removed) 1 else 0
+    }
+
+    protected override suspend fun insertTombstone(entity: FolderSyncTombstoneEntity) {
+        check(syncStateDao.folderTombstones.none { it.recordId == entity.recordId })
+        syncStateDao.folderTombstones += entity
+    }
+
+    fun replaceAllForSync(entities: List<VaultFolderEntity>) {
+        rows.clear()
+        rows += entities
+    }
+
+    fun clearForSync() = rows.clear()
+}
+
 private class FakeSyncStateDao : SyncStateDao() {
     lateinit var cardDao: FakeCardDao
     lateinit var addressDao: FakeAddressDao
+    lateinit var folderDao: FakeVaultFolderDao
     var vaultState: SyncVaultStateEntity? = null
     var orderState: SyncOrderStateEntity? = null
     var addressOrderState: AddressSyncOrderStateEntity? = null
     val tombstones = mutableListOf<SyncTombstoneEntity>()
     val addressTombstones = mutableListOf<AddressSyncTombstoneEntity>()
+    val folderTombstones = mutableListOf<FolderSyncTombstoneEntity>()
     private val importedPackages = mutableListOf<ImportedSyncPackageEntity>()
     val sourceSequences = linkedMapOf<String, Long>()
 
@@ -1004,6 +1159,9 @@ private class FakeSyncStateDao : SyncStateDao() {
 
     override suspend fun getAddressTombstones(): List<AddressSyncTombstoneEntity> =
         addressTombstones.sortedBy(AddressSyncTombstoneEntity::recordId)
+
+    override suspend fun getFolderTombstones(): List<FolderSyncTombstoneEntity> =
+        folderTombstones.sortedBy(FolderSyncTombstoneEntity::recordId)
 
     override suspend fun getRecentImportedPackages(): List<ImportedSyncPackageEntity> =
         importedPackages
@@ -1075,6 +1233,14 @@ private class FakeSyncStateDao : SyncStateDao() {
         addressTombstones += entities
     }
 
+    protected override suspend fun insertFolders(entities: List<VaultFolderEntity>) {
+        folderDao.replaceAllForSync(entities)
+    }
+
+    protected override suspend fun insertFolderTombstones(entities: List<FolderSyncTombstoneEntity>) {
+        folderTombstones += entities
+    }
+
     protected override suspend fun deleteAllCards() {
         cardDao.clearForSync()
     }
@@ -1089,6 +1255,22 @@ private class FakeSyncStateDao : SyncStateDao() {
 
     protected override suspend fun deleteAllAddressTombstones() {
         addressTombstones.clear()
+    }
+
+    protected override suspend fun deleteAllFolders() {
+        folderDao.clearForSync()
+    }
+
+    protected override suspend fun deleteAllFolderTombstones() {
+        folderTombstones.clear()
+    }
+
+    protected override suspend fun deleteAllImportedPackages() {
+        importedPackages.clear()
+    }
+
+    protected override suspend fun deleteAllSourceSequences() {
+        sourceSequences.clear()
     }
 
     protected override suspend fun trimImportedPackages() {

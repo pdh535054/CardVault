@@ -8,12 +8,22 @@ import org.junit.Test
 class RoomSchemaSecurityTest {
     private val schema by lazy {
         TestProjectFiles.resolve(
-            "schemas/com.pdh.cardvault.data.room.CardVaultDatabase/4.json",
+            "schemas/com.pdh.cardvault.data.room.CardVaultDatabase/6.json",
         ).readText()
     }
     private val versionThreeSchema by lazy {
         TestProjectFiles.resolve(
             "schemas/com.pdh.cardvault.data.room.CardVaultDatabase/3.json",
+        ).readText()
+    }
+    private val versionFourSchema by lazy {
+        TestProjectFiles.resolve(
+            "schemas/com.pdh.cardvault.data.room.CardVaultDatabase/4.json",
+        ).readText()
+    }
+    private val versionFiveSchema by lazy {
+        TestProjectFiles.resolve(
+            "schemas/com.pdh.cardvault.data.room.CardVaultDatabase/5.json",
         ).readText()
     }
 
@@ -87,6 +97,27 @@ class RoomSchemaSecurityTest {
             columnsFor("address_sync_tombstones"),
         )
         assertEquals(
+            setOf(
+                "id",
+                "ciphertext",
+                "recordIv",
+                "payloadSchemaVersion",
+                "cryptoVersion",
+                "createdAt",
+                "updatedAt",
+                "versionVector",
+            ),
+            columnsFor("vault_folders"),
+        )
+        assertEquals(
+            setOf("recordId", "versionVector", "deletedAt"),
+            columnsFor("folder_sync_tombstones"),
+        )
+        assertEquals(
+            setOf("collection", "orderedEntries"),
+            columnsFor("vault_folder_display_order"),
+        )
+        assertEquals(
             setOf("packageId", "sourceDeviceId", "exportSequence", "importedAt"),
             columnsFor("imported_sync_packages"),
         )
@@ -154,8 +185,8 @@ class RoomSchemaSecurityTest {
     }
 
     @Test
-    fun schemaVersionIsFourAndExplicitNonDestructiveMigrationsAreConfigured() {
-        assertTrue(Regex("\\\"version\\\"\\s*:\\s*4").containsMatchIn(schema))
+    fun schemaVersionIsSixAndExplicitNonDestructiveMigrationsAreConfigured() {
+        assertTrue(Regex("\\\"version\\\"\\s*:\\s*6").containsMatchIn(schema))
         assertTrue(
             TestProjectFiles.resolve(
                 "schemas/com.pdh.cardvault.data.room.CardVaultDatabase/1.json",
@@ -171,29 +202,42 @@ class RoomSchemaSecurityTest {
         assertTrue(databaseSource.contains("MIGRATION_1_2"))
         assertTrue(databaseSource.contains("MIGRATION_2_3"))
         assertTrue(databaseSource.contains("MIGRATION_3_4"))
-        assertTrue(
-            databaseSource.contains(
-                ".addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)",
-            ),
-        )
+        assertTrue(databaseSource.contains("MIGRATION_4_5"))
+        assertTrue(databaseSource.contains("MIGRATION_5_6"))
         assertTrue(databaseSource.contains("ALTER TABLE cards ADD COLUMN versionVector"))
         assertTrue(databaseSource.contains("ALTER TABLE addresses ADD COLUMN versionVector"))
         assertTrue(databaseSource.contains("CREATE TABLE IF NOT EXISTS sync_source_sequences"))
         assertTrue(databaseSource.contains("CREATE TABLE IF NOT EXISTS addresses"))
         assertTrue(databaseSource.contains("CREATE TABLE IF NOT EXISTS address_sync_order_state"))
         assertTrue(databaseSource.contains("CREATE TABLE IF NOT EXISTS address_sync_tombstones"))
+        assertTrue(databaseSource.contains("CREATE TABLE IF NOT EXISTS vault_folder_display_order"))
     }
 
     @Test
     fun versionThreeToFourAddressSchemaChangeIsStrictlyAdditive() {
         val versionThreeAddressColumns = columnsFor("addresses", versionThreeSchema)
-        val versionFourAddressColumns = columnsFor("addresses", schema)
+        val versionFourAddressColumns = columnsFor("addresses", versionFourSchema)
 
         assertEquals(versionThreeAddressColumns + "versionVector", versionFourAddressColumns)
         assertFalse(versionThreeSchema.contains("\"tableName\": \"address_sync_order_state\""))
         assertFalse(versionThreeSchema.contains("\"tableName\": \"address_sync_tombstones\""))
-        assertTrue(schema.contains("\"tableName\": \"address_sync_order_state\""))
-        assertTrue(schema.contains("\"tableName\": \"address_sync_tombstones\""))
+        assertTrue(versionFourSchema.contains("\"tableName\": \"address_sync_order_state\""))
+        assertTrue(versionFourSchema.contains("\"tableName\": \"address_sync_tombstones\""))
+    }
+
+    @Test
+    fun versionFourToFiveAddsOnlyEncryptedFolderTables() {
+        assertFalse(versionFourSchema.contains("\"tableName\": \"vault_folders\""))
+        assertFalse(versionFourSchema.contains("\"tableName\": \"folder_sync_tombstones\""))
+        assertTrue(schema.contains("\"tableName\": \"vault_folders\""))
+        assertTrue(schema.contains("\"tableName\": \"folder_sync_tombstones\""))
+    }
+
+    @Test
+    fun versionFiveToSixAddsOnlyNonSensitiveFolderDisplayOrder() {
+        assertFalse(versionFiveSchema.contains("\"tableName\": \"vault_folder_display_order\""))
+        assertTrue(schema.contains("\"tableName\": \"vault_folder_display_order\""))
+        assertEquals(setOf("collection", "orderedEntries"), columnsFor("vault_folder_display_order"))
     }
 
     private fun columnsFor(tableName: String, source: String = schema): Set<String> {

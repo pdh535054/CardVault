@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.pdh.cardvault.data.room.PersistentAddressDetail
 import com.pdh.cardvault.data.room.PersistentAddressListItem
 import com.pdh.cardvault.data.room.PersistentAddressRepository
+import com.pdh.cardvault.data.room.PersistentVaultFolderRepository
+import com.pdh.cardvault.data.room.PersistentVaultFolder
+import com.pdh.cardvault.data.room.VaultFolderKind
 import com.pdh.cardvault.domain.model.AddressInput
 import com.pdh.cardvault.domain.validation.AddressValidationError
 import com.pdh.cardvault.domain.validation.AddressValidationException
@@ -47,6 +50,7 @@ data class AddressListItemUiModel(
     val id: UUID,
     val nickname: String,
     val cardTemplateId: String,
+    val folderId: UUID? = null,
 ) {
     override fun toString(): String = "AddressListItemUiModel(sensitiveFields=redacted)"
 }
@@ -65,6 +69,15 @@ data class AddressDetailUiModel(
         .joinToString(separator = "\n")
 
     override fun toString(): String = "AddressDetailUiModel(sensitiveFields=redacted)"
+}
+
+enum class AddressCopyPart {
+    Complete,
+    DetailedAddress,
+    City,
+    Other,
+    PostalCode,
+    Country,
 }
 
 sealed interface AddressDetailUiState {
@@ -110,6 +123,8 @@ sealed interface AddressNavigationEvent {
 data class AddressesUiState(
     val vaultContentState: VaultContentState,
     val addresses: List<AddressListItemUiModel>,
+    val folders: List<VaultFolderUiModel> = emptyList(),
+    val folderOrder: List<UUID?> = listOf(null),
     val sortingInProgress: Boolean,
     val form: AddressFormUiState,
     val detail: AddressDetailUiState,
@@ -127,6 +142,7 @@ class AddressViewModel internal constructor(
     private val sensitiveClipboardController: SensitiveClipboardController,
     private val externalScope: CoroutineScope? = null,
 ) : ViewModel() {
+    private val folderRepository = repository as? PersistentVaultFolderRepository
     private var lifecycleEpoch = 0L
     private var activeDetailId: UUID? = null
     private var loadJob: Job? = null
@@ -136,6 +152,7 @@ class AddressViewModel internal constructor(
     private var editSaveJob: Job? = null
     private var deleteJob: Job? = null
     private var sortJob: Job? = null
+    private var folderOrderJob: Job? = null
     private val workScope: CoroutineScope
         get() = externalScope ?: viewModelScope
 
@@ -143,6 +160,7 @@ class AddressViewModel internal constructor(
         AddressesUiState(
             vaultContentState = VaultContentState.Locked,
             addresses = emptyList(),
+            folders = emptyList(),
             sortingInProgress = false,
             form = emptyForm(),
             detail = AddressDetailUiState.Hidden,
@@ -162,11 +180,15 @@ class AddressViewModel internal constructor(
         loadJob = workScope.launch {
             try {
                 val addresses = repository.getAddressList().map(PersistentAddressListItem::toUiModel)
+                val folders = loadFolders(addresses)
+                val folderOrder = loadFolderOrder()
                 if (lifecycleEpoch != expectedEpoch) return@launch
                 _uiState.update {
                     it.copy(
                         vaultContentState = VaultContentState.Ready,
                         addresses = addresses,
+                        folders = folders,
+                        folderOrder = folderOrder,
                         sortingInProgress = false,
                         operationMessage = AddressOperationMessage.None,
                     )
@@ -194,6 +216,7 @@ class AddressViewModel internal constructor(
         _uiState.value = AddressesUiState(
             vaultContentState = VaultContentState.Locked,
             addresses = emptyList(),
+            folders = emptyList(),
             sortingInProgress = false,
             form = emptyForm(),
             detail = AddressDetailUiState.Hidden,
@@ -225,11 +248,15 @@ class AddressViewModel internal constructor(
         loadJob = workScope.launch {
             try {
                 val addresses = repository.getAddressList().map(PersistentAddressListItem::toUiModel)
+                val folders = loadFolders(addresses)
+                val folderOrder = loadFolderOrder()
                 if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
                 activeDetailId = null
                 _uiState.update { current ->
                     current.copy(
                         addresses = addresses,
+                        folders = folders,
+                        folderOrder = folderOrder,
                         sortingInProgress = false,
                         detail = AddressDetailUiState.Hidden,
                         edit = AddressEditUiState.Hidden,
@@ -520,11 +547,23 @@ class AddressViewModel internal constructor(
         }
     }
 
-    fun copyAddress(recordId: UUID): Boolean {
+    fun copyAddress(
+        recordId: UUID,
+        part: AddressCopyPart = AddressCopyPart.Complete,
+    ): Boolean {
         val loaded = (_uiState.value.detail as? AddressDetailUiState.Loaded)
             ?.takeIf { it.recordId == recordId }
             ?: return false
-        val copied = sensitiveClipboardController.copySensitiveText(loaded.address.copyText())
+        val value = when (part) {
+            AddressCopyPart.Complete -> loaded.address.copyText()
+            AddressCopyPart.DetailedAddress -> loaded.address.detailedAddress
+            AddressCopyPart.City -> loaded.address.city
+            AddressCopyPart.Other -> loaded.address.other
+            AddressCopyPart.PostalCode -> loaded.address.postalCode
+            AddressCopyPart.Country -> loaded.address.country
+        }
+        if (value.isBlank()) return false
+        val copied = sensitiveClipboardController.copySensitiveText(value)
         _uiState.update {
             it.copy(
                 operationMessage = if (copied) {
@@ -614,6 +653,62 @@ class AddressViewModel internal constructor(
         return true
     }
 
+    fun createFolder(name: String): Boolean = runFolderOperation {
+        createFolder(VaultFolderKind.ADDRESSES, name)
+    }
+
+    fun reorderFolders(orderedIds: List<UUID?>): Boolean {
+        val folders = folderRepository ?: return false
+        val state = _uiState.value
+        if (
+            state.vaultContentState != VaultContentState.Ready ||
+            !repository.isUnlocked() ||
+            orderedIds == state.folderOrder ||
+            orderedIds.size != state.folders.size + 1 ||
+            orderedIds.count { it == null } != 1 ||
+            orderedIds.filterNotNull().toSet() != state.folders.map(VaultFolderUiModel::id).toSet()
+        ) {
+            return false
+        }
+        val previousOrder = state.folderOrder
+        val expectedEpoch = lifecycleEpoch
+        _uiState.update { it.copy(folderOrder = orderedIds) }
+        folderOrderJob?.cancel()
+        folderOrderJob = workScope.launch {
+            try {
+                folders.reorderFolders(VaultFolderKind.ADDRESSES, orderedIds)
+                val refreshedFolders = loadFolders(_uiState.value.addresses)
+                val refreshedOrder = loadFolderOrder()
+                if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
+                _uiState.update { it.copy(folders = refreshedFolders, folderOrder = refreshedOrder) }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                if (isCurrentReadyEpoch(expectedEpoch)) {
+                    _uiState.update {
+                        it.copy(
+                            folderOrder = previousOrder,
+                            operationMessage = AddressOperationMessage.StorageFailed,
+                        )
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    fun renameFolder(folderId: UUID, name: String): Boolean = runFolderOperation {
+        if (!renameFolder(folderId, name)) throw IllegalStateException()
+    }
+
+    fun deleteFolder(folderId: UUID): Boolean = runFolderOperation {
+        if (!deleteFolder(folderId)) throw IllegalStateException()
+    }
+
+    fun moveAddressToFolder(addressId: UUID, folderId: UUID?): Boolean = runFolderOperation {
+        if (!moveAddressToFolder(addressId, folderId)) throw IllegalStateException()
+    }
+
     fun onNavigationEventHandled(event: AddressNavigationEvent) {
         _uiState.update { current ->
             if (current.navigationEvent == event) current.copy(navigationEvent = null) else current
@@ -632,13 +727,59 @@ class AddressViewModel internal constructor(
         submitting = false,
     )
 
+    private fun runFolderOperation(
+        operation: suspend PersistentVaultFolderRepository.() -> Unit,
+    ): Boolean {
+        val folders = folderRepository ?: return false
+        if (_uiState.value.vaultContentState != VaultContentState.Ready || !repository.isUnlocked()) {
+            return false
+        }
+        val expectedEpoch = lifecycleEpoch
+        workScope.launch {
+            try {
+                folders.operation()
+                val addresses = repository.getAddressList().map(PersistentAddressListItem::toUiModel)
+                val refreshedFolders = loadFolders(addresses)
+                val refreshedOrder = loadFolderOrder()
+                if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
+                _uiState.update {
+                    it.copy(addresses = addresses, folders = refreshedFolders, folderOrder = refreshedOrder)
+                }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                if (isCurrentReadyEpoch(expectedEpoch)) {
+                    _uiState.update { it.copy(operationMessage = AddressOperationMessage.StorageFailed) }
+                }
+            }
+        }
+        return true
+    }
+
+    private suspend fun loadFolders(addresses: List<AddressListItemUiModel>): List<VaultFolderUiModel> =
+        folderRepository?.getFolders(VaultFolderKind.ADDRESSES)?.map { folder ->
+            folder.toUiModel(addresses.count { it.folderId == folder.id })
+        }.orEmpty()
+
+    private suspend fun loadFolderOrder(): List<UUID?> =
+        folderRepository?.getFolderOrder(VaultFolderKind.ADDRESSES) ?: listOf(null)
+
     private fun isCurrentReadyEpoch(epoch: Long): Boolean =
         lifecycleEpoch == epoch &&
             _uiState.value.vaultContentState == VaultContentState.Ready &&
             repository.isUnlocked()
 
     private fun cancelJobs() {
-        listOf(loadJob, addJob, detailJob, editLoadJob, editSaveJob, deleteJob, sortJob).forEach {
+        listOf(
+            loadJob,
+            addJob,
+            detailJob,
+            editLoadJob,
+            editSaveJob,
+            deleteJob,
+            sortJob,
+            folderOrderJob,
+        ).forEach {
             it?.cancel()
         }
         loadJob = null
@@ -648,6 +789,7 @@ class AddressViewModel internal constructor(
         editSaveJob = null
         deleteJob = null
         sortJob = null
+        folderOrderJob = null
     }
 
     override fun onCleared() {
@@ -688,7 +830,10 @@ private fun AddressFormUiState.toInput(): AddressInput = AddressInput(
 )
 
 private fun PersistentAddressListItem.toUiModel(): AddressListItemUiModel =
-    AddressListItemUiModel(id, nickname, cardTemplateId)
+    AddressListItemUiModel(id, nickname, cardTemplateId, folderId)
+
+private fun PersistentVaultFolder.toUiModel(itemCount: Int): VaultFolderUiModel =
+    VaultFolderUiModel(id = id, name = name, itemCount = itemCount)
 
 private fun PersistentAddressDetail.toUiModel(): AddressDetailUiModel = AddressDetailUiModel(
     nickname,

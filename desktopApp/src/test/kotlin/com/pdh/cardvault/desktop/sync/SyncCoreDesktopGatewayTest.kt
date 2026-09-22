@@ -48,6 +48,34 @@ class SyncCoreDesktopGatewayTest {
     }
 
     @Test
+    fun `authenticated pairing can reunify independently initialized vaults`() {
+        val sourceGateway = SyncCoreDesktopGateway(clock, SecureRandom())
+        val targetGateway = SyncCoreDesktopGateway(clock, SecureRandom())
+        val sourcePairing = sourceGateway.export(snapshotWithCard(), newPairing = true)
+        val targetPairing = targetGateway.export(snapshotWithCard(), newPairing = true)
+        val sourceCode = assertNotNull(sourcePairing.pairingCode)
+
+        val imported = targetGateway.import(
+            sourcePairing.bytes,
+            sourceCode,
+            targetPairing.snapshotAfterExport,
+        )
+
+        assertEquals(2, imported.snapshot.cards.size)
+        assertEquals(2, imported.snapshot.addresses.size)
+        assertEquals(sourcePairing.snapshotAfterExport.syncState.vaultId, imported.snapshot.syncState.vaultId)
+
+        val sync = targetGateway.export(imported.snapshot, newPairing = false)
+        val mergedBack = sourceGateway.import(sync.bytes, null, sourcePairing.snapshotAfterExport)
+        assertEquals(2, mergedBack.snapshot.cards.size)
+        assertEquals(2, mergedBack.snapshot.addresses.size)
+
+        sourcePairing.bytes.fill(0)
+        targetPairing.bytes.fill(0)
+        sync.bytes.fill(0)
+    }
+
+    @Test
     fun `legacy card-only pairing preserves a desktop local address`() {
         val sourceGateway = SyncCoreDesktopGateway(clock, SecureRandom())
         val pairing = sourceGateway.export(snapshotWithCard(), newPairing = true)
@@ -57,7 +85,7 @@ class SyncCoreDesktopGatewayTest {
         val sharedSecret = opened.syncSecret.copyBytes()
         val legacyPayload = opened.copy(
             syncSecret = SecretBytes(sharedSecret),
-            snapshot = opened.snapshot.copy(addresses = null),
+            snapshot = opened.snapshot.copy(addresses = null, folders = null),
         )
         val legacyBytes = try {
             CardVaultSyncFiles.encodePairing(legacyPayload, pairingSecret, SecureRandom())

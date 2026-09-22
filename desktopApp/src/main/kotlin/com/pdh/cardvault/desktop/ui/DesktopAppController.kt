@@ -5,20 +5,28 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.pdh.cardvault.desktop.data.DesktopCardRepository
+import com.pdh.cardvault.desktop.data.LocalKeyUnavailableException
 import com.pdh.cardvault.desktop.model.CardCoverStyle
 import com.pdh.cardvault.desktop.model.AndroidTemplateStyleCodec
 import com.pdh.cardvault.desktop.model.DesktopCard
 import com.pdh.cardvault.desktop.model.DesktopAddress
+import com.pdh.cardvault.desktop.model.DesktopAddressCopyPart
+import com.pdh.cardvault.desktop.model.DesktopFolder
+import com.pdh.cardvault.desktop.model.DesktopFolderKind
 import com.pdh.cardvault.desktop.security.SensitiveAction
 import com.pdh.cardvault.desktop.security.SensitiveActionAuthenticator
 import com.pdh.cardvault.desktop.security.WindowsHelloAuthenticator
 import com.pdh.cardvault.desktop.sync.DesktopSyncGateway
 import com.pdh.cardvault.desktop.sync.DesktopTransferFiles
+import com.pdh.cardvault.sync.CardVaultSyncFiles
+import com.pdh.cardvault.sync.SyncFileKind
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
 import java.nio.file.Path
+import java.io.IOException
 import java.time.Clock
 import java.util.Timer
 import java.util.TimerTask
@@ -74,6 +82,13 @@ data class AddressDraftErrors(
         get() = listOf(nickname, detailedAddress, city, other, postalCode, country).any { it != null }
 }
 
+data class TransferFeedback(
+    val text: String,
+    val isError: Boolean = false,
+)
+
+private enum class ImportStage { Read, Validate, Authenticate, Merge, Persist }
+
 class DesktopAppController(
     private val repository: DesktopCardRepository,
     val syncGateway: DesktopSyncGateway,
@@ -83,6 +98,18 @@ class DesktopAppController(
     var cards by mutableStateOf(repository.cards())
         private set
     var addresses by mutableStateOf(repository.addresses())
+        private set
+    var cardFolders by mutableStateOf(repository.folders(DesktopFolderKind.CARDS))
+        private set
+    var addressFolders by mutableStateOf(repository.folders(DesktopFolderKind.ADDRESSES))
+        private set
+    var cardFolderOrder by mutableStateOf(repository.folderOrder(DesktopFolderKind.CARDS))
+        private set
+    var addressFolderOrder by mutableStateOf(repository.folderOrder(DesktopFolderKind.ADDRESSES))
+        private set
+    var selectedCardFolderId by mutableStateOf<String?>(null)
+        private set
+    var selectedAddressFolderId by mutableStateOf<String?>(null)
         private set
     var section by mutableStateOf(DesktopSection.Home)
     var selectedId by mutableStateOf(cards.firstOrNull()?.id)
@@ -113,6 +140,14 @@ class DesktopAppController(
         private set
     var authenticatingAction by mutableStateOf<SensitiveAction?>(null)
         private set
+    var selectedImportPath by mutableStateOf<Path?>(null)
+        private set
+    var selectedImportKind by mutableStateOf<SyncFileKind?>(null)
+        private set
+    var transferBusy by mutableStateOf(false)
+        private set
+    var transferFeedback by mutableStateOf<TransferFeedback?>(null)
+        private set
 
     private val authenticationMutex = Mutex()
     private var revealedCardId: String? = null
@@ -128,6 +163,44 @@ class DesktopAppController(
     fun selectAddress(id: String) {
         selectedAddressId = id.takeIf { value -> addresses.any { it.id == value } }
     }
+
+    fun selectCardFolder(id: String?) { selectedCardFolderId = id }
+    fun selectAddressFolder(id: String?) { selectedAddressFolderId = id }
+
+    fun createFolder(name: String, kind: DesktopFolderKind): Boolean = runCatching {
+        repository.createFolder(name, kind)
+        refreshFolders()
+        true
+    }.onFailure { notice = it.message ?: "无法创建文件夹" }.getOrDefault(false)
+
+    fun renameFolder(id: String, name: String): Boolean = runCatching {
+        val changed = repository.renameFolder(id, name)
+        refreshFolders()
+        changed
+    }.onFailure { notice = it.message ?: "无法重命名文件夹" }.getOrDefault(false)
+
+    fun deleteFolder(id: String): Boolean {
+        val changed = repository.deleteFolder(id)
+        if (changed) {
+            if (selectedCardFolderId == id) selectedCardFolderId = null
+            if (selectedAddressFolderId == id) selectedAddressFolderId = null
+            refreshCards()
+            refreshAddresses()
+            refreshFolders()
+        }
+        return changed
+    }
+
+    fun moveCardToFolder(cardId: String, folderId: String?): Boolean =
+        repository.moveCardToFolder(cardId, folderId).also { if (it) refreshCards() }
+
+    fun moveAddressToFolder(addressId: String, folderId: String?): Boolean =
+        repository.moveAddressToFolder(addressId, folderId).also { if (it) refreshAddresses() }
+
+    fun reorderFolders(kind: DesktopFolderKind, orderedIds: List<String?>): Boolean =
+        repository.reorderFolders(kind, orderedIds).also { changed ->
+            if (changed) refreshFolders()
+        }
 
     fun startAdd() {
         revealedCardId = null
@@ -338,12 +411,81 @@ class DesktopAppController(
     fun moveAddress(id: String, targetIndex: Int) {
         if (addresses.isNotEmpty() && repository.moveAddress(id, targetIndex.coerceIn(addresses.indices))) {
             refreshAddresses()
+            refreshFolders()
         }
     }
 
     fun chooseExportDirectory(directory: Path) {
         exportDirectory = directory.toAbsolutePath().normalize().toString()
         preferences.put(PREF_EXPORT_DIRECTORY, exportDirectory)
+    }
+
+    fun selectImportFile(path: Path): Boolean {
+        if (transferBusy) return false
+        val bytes = runCatching { DesktopTransferFiles.readImport(path) }
+            .getOrElse { error ->
+                selectedImportPath = null
+                selectedImportKind = null
+                setTransferFeedback(safeTransferError(error), isError = true)
+                return false
+            }
+        return try {
+            val kind = CardVaultSyncFiles.inspectKind(bytes)
+            selectedImportPath = path.toAbsolutePath().normalize()
+            selectedImportKind = kind
+            setTransferFeedback(
+                when {
+                    kind == SyncFileKind.PAIRING ->
+                        "已选择首次配对文件，请粘贴手机上的配对码后开始导入"
+                    syncKeyEpoch == 0L ->
+                        "这是日常同步文件，但电脑尚未配对。请在手机选择“连接新设备”，重新导出 .cvpair 文件"
+                    else -> "已选择同步文件，可以开始导入"
+                },
+                isError = kind == SyncFileKind.SYNC && syncKeyEpoch == 0L,
+            )
+            true
+        } catch (error: Throwable) {
+            selectedImportPath = null
+            selectedImportKind = null
+            setTransferFeedback(safeTransferError(error), isError = true)
+            false
+        } finally {
+            bytes.fill(0)
+        }
+    }
+
+    suspend fun importSelected(pairingCodeInput: String?): Boolean {
+        val path = selectedImportPath
+        if (path == null) {
+            setTransferFeedback("请先选择手机导出的 .cvpair 或 .cvsync 文件", isError = true)
+            return false
+        }
+        return import(path, pairingCodeInput).also { imported ->
+            if (imported) {
+                selectedImportPath = null
+                selectedImportKind = null
+            }
+        }
+    }
+
+    fun pastePairingCodeFromClipboard(): String? {
+        val value = runCatching {
+            Toolkit.getDefaultToolkit().systemClipboard.getData(DataFlavor.stringFlavor) as? String
+        }.getOrNull()
+        val normalized = value?.let(::normalizePairingCodeInput).orEmpty()
+        return normalized.takeIf(String::isNotBlank).also { code ->
+            if (code == null) {
+                setTransferFeedback("剪贴板中没有可用的配对码", isError = true)
+            } else {
+                setTransferFeedback("已从剪贴板粘贴配对码")
+            }
+        }
+    }
+
+    fun copyCurrentPairingCode() {
+        val code = pairingCode ?: return
+        copySensitiveText(code, "配对码已复制")
+        setTransferFeedback("配对码已复制，剪贴板将在 60 秒后清除")
     }
 
     suspend fun export(newPairing: Boolean): Boolean {
@@ -402,31 +544,61 @@ class DesktopAppController(
     }
 
     suspend fun import(path: Path, pairingCodeInput: String?): Boolean {
-        if (!authenticate(SensitiveAction.ImportVault)) return false
+        if (transferBusy) return false
+        transferBusy = true
+        var stage = ImportStage.Read
         val bytes = runCatching { DesktopTransferFiles.readImport(path) }
             .getOrElse {
-                notice = it.message ?: "导入失败"
+                setTransferFeedback(safeTransferError(it, stage), isError = true)
+                transferBusy = false
                 return false
             }
         return try {
+            stage = ImportStage.Validate
+            val kind = CardVaultSyncFiles.inspectKind(bytes)
+            val normalizedCode = pairingCodeInput?.let(::normalizePairingCodeInput)
+                ?.takeIf(String::isNotBlank)
+            if (kind == SyncFileKind.PAIRING && normalizedCode == null) {
+                setTransferFeedback("这是首次配对文件，请先粘贴手机显示的配对码", isError = true)
+                return false
+            }
+            if (kind == SyncFileKind.SYNC && syncKeyEpoch == 0L) {
+                setTransferFeedback(
+                    "电脑尚未完成首次配对，无法解密 .cvsync。请在手机选择“连接新设备”并导出 .cvpair 文件",
+                    isError = true,
+                )
+                return false
+            }
+            stage = ImportStage.Authenticate
+            setTransferFeedback("正在等待 Windows Hello 验证…")
+            if (!authenticate(SensitiveAction.ImportVault)) {
+                setTransferFeedback("Windows Hello 验证未完成，尚未导入任何数据", isError = true)
+                return false
+            }
+            stage = ImportStage.Merge
+            setTransferFeedback("正在验证并合并加密数据…")
             val result = syncGateway.import(
                 bytes,
-                pairingCodeInput?.trim()?.takeIf(String::isNotEmpty),
+                normalizedCode,
                 repository.snapshot(),
             )
+            stage = ImportStage.Persist
             repository.replaceSnapshot(result.snapshot)
             refreshSyncStatus()
             refreshCards()
             refreshAddresses()
+            refreshFolders()
             selectedId = cards.firstOrNull()?.id
             selectedAddressId = addresses.firstOrNull()?.id
             notice = result.message
+            setTransferFeedback(result.message)
             true
         } catch (error: Throwable) {
-            notice = error.message ?: "无法验证同步文件"
+            setTransferFeedback(safeTransferError(error, stage), isError = true)
             false
         } finally {
             bytes.fill(0)
+            transferBusy = false
         }
     }
 
@@ -451,9 +623,19 @@ class DesktopAppController(
         copySensitiveText(card.cardNumber, "卡号已复制")
     }
 
-    fun copyAddress(addressId: String) {
+    fun copyAddress(
+        addressId: String,
+        part: DesktopAddressCopyPart = DesktopAddressCopyPart.Complete,
+    ) {
         val address = addresses.firstOrNull { it.id == addressId } ?: return
-        copySensitiveText(address.copyText(), "完整地址已复制")
+        val value = address.copyText(part)
+        if (value.isBlank()) return
+        val message = if (part == DesktopAddressCopyPart.Complete) {
+            "完整地址已复制"
+        } else {
+            "地址内容已复制"
+        }
+        copySensitiveText(value, message)
     }
 
     private fun copySensitiveText(value: String, successMessage: String) {
@@ -474,6 +656,84 @@ class DesktopAppController(
     fun clearNotice() {
         notice = null
     }
+
+    private fun setTransferFeedback(text: String, isError: Boolean = false) {
+        transferFeedback = TransferFeedback(text, isError)
+        notice = text
+    }
+
+    private fun safeTransferError(error: Throwable, stage: ImportStage? = null): String = when (error) {
+        is com.pdh.cardvault.desktop.sync.DesktopSyncException -> when (error.code) {
+            com.pdh.cardvault.sync.SyncErrorCode.INVALID_PAIRING_CODE ->
+                "配对码格式不正确（CV-I201）"
+            com.pdh.cardvault.sync.SyncErrorCode.AUTHENTICATION_FAILED ->
+                "配对码与文件不匹配，或文件已被修改（CV-I202）"
+            com.pdh.cardvault.sync.SyncErrorCode.REPLAYED_PACKAGE ->
+                "这个传输文件已经导入过（CV-I203）"
+            com.pdh.cardvault.sync.SyncErrorCode.STALE_PACKAGE ->
+                "传输文件已过期，或早于本机已有版本（CV-I204）"
+            com.pdh.cardvault.sync.SyncErrorCode.VAULT_MISMATCH ->
+                "该文件属于另一个 CardVault 数据库（CV-I205）"
+            com.pdh.cardvault.sync.SyncErrorCode.LIMIT_EXCEEDED ->
+                "传输文件超过安全限制（CV-I206）"
+            com.pdh.cardvault.sync.SyncErrorCode.UNSUPPORTED_VERSION ->
+                "传输文件版本不受支持（CV-I207）"
+            com.pdh.cardvault.sync.SyncErrorCode.INVARIANT_VIOLATION ->
+                "传输数据内部状态不一致，已停止导入（CV-I208）"
+            com.pdh.cardvault.sync.SyncErrorCode.INVALID_FORMAT ->
+                "请选择有效的 CardVault 加密文件（CV-I209）"
+        }
+        is com.pdh.cardvault.sync.SyncProtocolException -> when (error.code) {
+            com.pdh.cardvault.sync.SyncErrorCode.INVALID_PAIRING_CODE ->
+                "配对码格式不正确（CV-I201）"
+            com.pdh.cardvault.sync.SyncErrorCode.AUTHENTICATION_FAILED ->
+                "配对码与文件不匹配，或文件已被修改（CV-I202）"
+            com.pdh.cardvault.sync.SyncErrorCode.REPLAYED_PACKAGE ->
+                "这个传输文件已经导入过（CV-I203）"
+            com.pdh.cardvault.sync.SyncErrorCode.STALE_PACKAGE ->
+                "传输文件已过期，或早于本机已有版本（CV-I204）"
+            com.pdh.cardvault.sync.SyncErrorCode.VAULT_MISMATCH ->
+                "该文件属于另一个 CardVault 数据库（CV-I205）"
+            com.pdh.cardvault.sync.SyncErrorCode.LIMIT_EXCEEDED ->
+                "传输文件超过安全限制（CV-I206）"
+            com.pdh.cardvault.sync.SyncErrorCode.UNSUPPORTED_VERSION ->
+                "传输文件版本不受支持（CV-I207）"
+            com.pdh.cardvault.sync.SyncErrorCode.INVARIANT_VIOLATION ->
+                "传输数据内部状态不一致，已停止导入（CV-I208）"
+            com.pdh.cardvault.sync.SyncErrorCode.INVALID_FORMAT ->
+                "请选择有效的 CardVault 加密文件（CV-I209）"
+        }
+        is LocalKeyUnavailableException ->
+            "Windows 本地加密密钥不可用，数据没有写入（CV-I401）"
+        is IOException ->
+            "电脑本地文件无法读写，请检查磁盘和目录权限（CV-I402）"
+        is IllegalArgumentException -> when (stage) {
+            ImportStage.Merge -> "手机数据与当前电脑版本不兼容（CV-I301）"
+            else -> "请选择有效的 CardVault 加密文件（CV-I101）"
+        }
+        is IllegalStateException -> when (error.message) {
+            "请先导入配对文件。" ->
+                "电脑尚未完成首次配对，请先导入手机生成的 .cvpair 文件"
+            else -> when (stage) {
+                ImportStage.Persist -> "电脑本地加密存储失败，数据没有写入（CV-I403）"
+                ImportStage.Merge -> "传输数据无法安全合并（CV-I302）"
+                else -> "导入失败，未更改本机数据（CV-I499）"
+            }
+        }
+        else -> when (stage) {
+            ImportStage.Persist -> "电脑本地加密存储失败，数据没有写入（CV-I404）"
+            ImportStage.Merge -> "传输数据无法安全合并（CV-I303）"
+            else -> "导入失败，未更改本机数据（CV-I499）"
+        }
+    }
+
+    private fun normalizePairingCodeInput(value: String): String = value
+        .uppercase()
+        .filter { character ->
+            character in 'A'..'Z' || character in '1'..'7' ||
+                character == '-' || character.isWhitespace()
+        }
+        .take(MAX_PAIRING_CODE_INPUT)
 
     /** Invalidates every visible disclosure without touching an unfinished editor draft. */
     fun concealSensitiveInformation() {
@@ -505,6 +765,13 @@ class DesktopAppController(
         addresses = repository.addresses()
     }
 
+    private fun refreshFolders() {
+        cardFolders = repository.folders(DesktopFolderKind.CARDS)
+        addressFolders = repository.folders(DesktopFolderKind.ADDRESSES)
+        cardFolderOrder = repository.folderOrder(DesktopFolderKind.CARDS)
+        addressFolderOrder = repository.folderOrder(DesktopFolderKind.ADDRESSES)
+    }
+
     private fun refreshSyncStatus() {
         val state = repository.snapshot().syncState
         syncKeyEpoch = state.keyEpoch.takeIf { state.sharedSyncKey != null } ?: 0L
@@ -519,6 +786,7 @@ class DesktopAppController(
     private companion object {
         val preferences: Preferences = Preferences.userRoot().node("com/pdh/cardvault/desktop")
         const val PREF_EXPORT_DIRECTORY = "exportDirectory"
+        const val MAX_PAIRING_CODE_INPUT = 48
     }
 }
 

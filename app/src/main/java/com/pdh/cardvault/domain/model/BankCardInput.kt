@@ -16,6 +16,7 @@ data class BankCardInput(
     val cvv: String?,
     val cardTemplateId: String,
     val notes: String,
+    val folderId: String? = null,
 ) {
     override fun toString(): String = "BankCardInput(sensitiveFields=redacted)"
 }

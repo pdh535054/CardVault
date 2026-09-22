@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -51,6 +52,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -66,11 +68,13 @@ import com.pdh.cardvault.R
 import com.pdh.cardvault.domain.validation.AddressValidationError
 import com.pdh.cardvault.presentation.AddressDetailUiModel
 import com.pdh.cardvault.presentation.AddressDetailUiState
+import com.pdh.cardvault.presentation.AddressCopyPart
 import com.pdh.cardvault.presentation.AddressEditUiState
 import com.pdh.cardvault.presentation.AddressFormField
 import com.pdh.cardvault.presentation.AddressFormUiState
 import com.pdh.cardvault.presentation.AddressListItemUiModel
 import com.pdh.cardvault.presentation.AddressOperationMessage
+import com.pdh.cardvault.presentation.VaultFolderUiModel
 import com.pdh.cardvault.ui.card.AddressWalletStack
 import com.pdh.cardvault.ui.card.CardTemplatePicker
 import com.pdh.cardvault.ui.card.CardTemplatePreview
@@ -83,14 +87,29 @@ import kotlin.math.cos
 @Composable
 fun AddressListScreen(
     addresses: List<AddressListItemUiModel>,
+    folders: List<VaultFolderUiModel>,
+    folderOrder: List<UUID?>,
     sortingInProgress: Boolean,
     operationMessage: AddressOperationMessage,
     onBack: () -> Unit,
     onAddAddress: () -> Unit,
     onAddressSelected: (UUID) -> Unit,
     onAddressesReordered: (List<UUID>) -> Unit,
+    onFoldersReordered: (List<UUID?>) -> Unit,
+    onCreateFolder: (String) -> Unit,
+    onRenameFolder: (UUID, String) -> Unit,
+    onDeleteFolder: (UUID) -> Unit,
+    onMoveAddressToFolder: (UUID, UUID?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var selectedFolderId by remember { mutableStateOf<UUID?>(null) }
+    val folderTargets = remember { mutableMapOf<UUID?, Rect>() }
+    LaunchedEffect(folders) {
+        if (selectedFolderId != null && folders.none { it.id == selectedFolderId }) {
+            selectedFolderId = null
+        }
+    }
+    val visibleAddresses = addresses.filter { it.folderId == selectedFolderId }
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
@@ -106,23 +125,57 @@ fun AddressListScreen(
             if (operationMessage != AddressOperationMessage.None) {
                 item("address-message") { AddressOperationNotice(operationMessage) }
             }
-            if (addresses.isEmpty()) {
+            item("address-folder-shelf") {
+                VaultFolderShelf(
+                    folders = folders,
+                    unfiledCount = addresses.count { it.folderId == null },
+                    folderOrder = folderOrder,
+                    selectedFolderId = selectedFolderId,
+                    onSelect = { selectedFolderId = it },
+                    onCreate = onCreateFolder,
+                    onRename = onRenameFolder,
+                    onDelete = onDeleteFolder,
+                    onReorder = onFoldersReordered,
+                    onTargetBoundsChanged = { id, bounds -> folderTargets[id] = bounds },
+                )
+            }
+            if (visibleAddresses.isEmpty()) {
                 item("address-empty") { EmptyAddressState(onAddAddress) }
             } else {
                 item("address-stack") {
                     AddressWalletStack(
-                        addresses = addresses,
+                        addresses = visibleAddresses,
                         sortingInProgress = sortingInProgress,
                         openActionLabel = stringResource(R.string.action_open_address_detail),
                         moveUpActionLabel = stringResource(R.string.action_move_up),
                         moveDownActionLabel = stringResource(R.string.action_move_down),
                         onAddressOpened = onAddressSelected,
-                        onAddressesReordered = onAddressesReordered,
+                        onAddressesReordered = { orderedVisibleIds ->
+                            onAddressesReordered(mergeVisibleAddressOrder(addresses, orderedVisibleIds))
+                        },
+                        onAddressDropped = { addressId, position ->
+                            val target = folderTargets.entries
+                                .firstOrNull { (_, bounds) -> bounds.contains(position) }
+                            val currentFolder = addresses.firstOrNull { it.id == addressId }?.folderId
+                            if (target != null && target.key != currentFolder) {
+                                onMoveAddressToFolder(addressId, target.key)
+                                true
+                            } else false
+                        },
                     )
                 }
             }
         }
     }
+}
+
+private fun mergeVisibleAddressOrder(
+    allAddresses: List<AddressListItemUiModel>,
+    orderedVisibleIds: List<UUID>,
+): List<UUID> {
+    val visible = orderedVisibleIds.iterator()
+    val visibleSet = orderedVisibleIds.toSet()
+    return allAddresses.map { address -> if (address.id in visibleSet) visible.next() else address.id }
 }
 
 @Composable
@@ -456,7 +509,7 @@ private fun addressFieldError(
 fun AddressDetailScreen(
     state: AddressDetailUiState,
     operationMessage: AddressOperationMessage,
-    onCopy: (UUID) -> Unit,
+    onCopy: (UUID, AddressCopyPart) -> Unit,
     onEdit: (UUID) -> Unit,
     onDelete: (UUID) -> Unit,
     onBack: () -> Unit,
@@ -519,7 +572,7 @@ fun AddressDetailScreen(
                     FlippableAddressDetail(
                         address = state.address,
                         showBack = showBack,
-                        onCopy = { onCopy(state.recordId) },
+                        onCopy = { part -> onCopy(state.recordId, part) },
                         onShowBackChanged = { showBack = it },
                     )
                     AddressOperationNotice(operationMessage)
@@ -559,7 +612,7 @@ fun AddressDetailScreen(
 private fun FlippableAddressDetail(
     address: AddressDetailUiModel,
     showBack: Boolean,
-    onCopy: () -> Unit,
+    onCopy: (AddressCopyPart) -> Unit,
     onShowBackChanged: (Boolean) -> Unit,
 ) {
     val rotation by animateFloatAsState(
@@ -619,7 +672,7 @@ private fun FlippableAddressDetail(
 @Composable
 private fun AddressBackCard(
     address: AddressDetailUiModel,
-    onCopy: () -> Unit,
+    onCopy: (AddressCopyPart) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val template = CardTemplateRegistry.findOrDefault(address.cardTemplateId)
@@ -633,62 +686,108 @@ private fun AddressBackCard(
             )
             .padding(horizontal = 22.dp, vertical = 18.dp),
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceBetween,
+        Surface(
+            onClick = { onCopy(AddressCopyPart.Complete) },
+            modifier = Modifier.align(Alignment.TopEnd),
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.18f),
+            contentColor = textColor,
         ) {
             Text(
+                text = stringResource(R.string.address_copy_all),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Column(
+            modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            AddressCopyLine(
                 text = address.detailedAddress,
-                color = textColor,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                copyLabel = stringResource(R.string.address_copy_detail),
+                textColor = textColor,
+                emphasized = true,
                 maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
+                onClick = { onCopy(AddressCopyPart.DetailedAddress) },
             )
             address.other.takeIf(String::isNotBlank)?.let { other ->
-                Text(
+                AddressCopyLine(
                     text = other,
-                    color = textColor.copy(alpha = 0.76f),
-                    style = MaterialTheme.typography.bodySmall,
+                    copyLabel = stringResource(R.string.address_copy_other),
+                    textColor = textColor,
                     maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    onClick = { onCopy(AddressCopyPart.Other) },
                 )
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                Column {
-                    Text(address.city, color = textColor, fontWeight = FontWeight.Medium)
-                    Text(
-                        address.postalCode,
-                        color = textColor.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    address.country.takeIf(String::isNotBlank)?.let { country ->
-                        Text(
-                            country,
-                            color = textColor.copy(alpha = 0.7f),
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
-                }
-                Surface(
-                    onClick = onCopy,
-                    shape = CircleShape,
-                    color = Color.Black.copy(alpha = 0.22f),
-                    contentColor = textColor,
-                ) {
-                    Text(
-                        text = stringResource(R.string.address_copy_all),
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
+            AddressCopyLine(
+                text = address.city,
+                copyLabel = stringResource(R.string.address_copy_city),
+                textColor = textColor,
+                onClick = { onCopy(AddressCopyPart.City) },
+            )
+            AddressCopyLine(
+                text = address.postalCode,
+                copyLabel = stringResource(R.string.address_copy_postal_code),
+                textColor = textColor,
+                onClick = { onCopy(AddressCopyPart.PostalCode) },
+            )
+            address.country.takeIf(String::isNotBlank)?.let { country ->
+                AddressCopyLine(
+                    text = country,
+                    copyLabel = stringResource(R.string.address_copy_country),
+                    textColor = textColor,
+                    onClick = { onCopy(AddressCopyPart.Country) },
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun AddressCopyLine(
+    text: String,
+    copyLabel: String,
+    textColor: Color,
+    onClick: () -> Unit,
+    emphasized: Boolean = false,
+    maxLines: Int = 1,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .clearAndSetSemantics {
+                contentDescription = copyLabel
+                onClick(label = copyLabel) {
+                    onClick()
+                    true
+                }
+            }
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.weight(1f),
+            color = textColor,
+            style = if (emphasized) {
+                MaterialTheme.typography.titleMedium
+            } else {
+                MaterialTheme.typography.bodyMedium
+            },
+            fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = "⧉",
+            color = textColor.copy(alpha = 0.58f),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(start = 10.dp),
+        )
     }
 }
 

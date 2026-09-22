@@ -28,8 +28,26 @@ import java.awt.Dimension
 import java.awt.Frame
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+import java.nio.file.Files
+import kotlin.system.exitProcess
 
-fun main() = application {
+fun main(args: Array<String>) {
+    if (args.contains("--self-test-local-vault")) {
+        val directory = EncryptedDesktopVault.defaultDirectory()
+        Files.createDirectories(directory)
+        val resultFile = directory.resolve("self-test-result.txt")
+        val result = runCatching { EncryptedDesktopVault().load() }
+        val diagnostic = result.fold(
+            onSuccess = { "OK" },
+            onFailure = { error -> "ERROR:${error::class.java.name}" },
+        )
+        Files.writeString(resultFile, diagnostic)
+        exitProcess(if (result.isSuccess) 0 else 2)
+    }
+    launchApplication()
+}
+
+private fun launchApplication() = application {
     val state = rememberWindowState(width = 1440.dp, height = 900.dp)
     Window(
         onCloseRequest = ::exitApplication,

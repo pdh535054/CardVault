@@ -53,9 +53,9 @@ fun VaultTransferScreen(
     state: VaultTransferUiState,
     onBack: () -> Unit,
     onPrepareExport: () -> Unit,
-    onPrepareNewDevicePairing: () -> Unit,
     onRotateSyncKey: () -> Unit,
     onSharePreparedExport: () -> Unit,
+    onCopyPairingCode: () -> Unit,
     onImportUriSelected: (String) -> Unit,
     onPairingCodeChanged: (String) -> Unit,
     onConfirmPairingImport: () -> Unit,
@@ -112,16 +112,8 @@ fun VaultTransferScreen(
 
             TransferActionCard(
                 eyebrow = stringResource(R.string.vault_transfer_export_eyebrow),
-                title = if (state.pairingState == VaultPairingState.Paired) {
-                    stringResource(R.string.vault_transfer_generate_sync_title)
-                } else {
-                    stringResource(R.string.vault_transfer_connect_first_title)
-                },
-                description = if (state.pairingState == VaultPairingState.Paired) {
-                    stringResource(R.string.vault_transfer_sync_description)
-                } else {
-                    stringResource(R.string.vault_transfer_pair_description)
-                },
+                title = stringResource(R.string.vault_transfer_generate_sync_title),
+                description = stringResource(R.string.vault_transfer_sync_description),
             ) {
                 if (state.preparedFileName == null) {
                     Button(
@@ -139,15 +131,6 @@ fun VaultTransferScreen(
                             ),
                         )
                     }
-                    if (state.pairingState == VaultPairingState.Paired) {
-                        OutlinedButton(
-                            onClick = onPrepareNewDevicePairing,
-                            enabled = !state.busy,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.vault_transfer_connect_device))
-                        }
-                    }
                 } else {
                     Button(
                         onClick = onSharePreparedExport,
@@ -155,15 +138,6 @@ fun VaultTransferScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(stringResource(R.string.vault_transfer_open_share))
-                    }
-                    if (state.pairingState == VaultPairingState.Paired) {
-                        OutlinedButton(
-                            onClick = onPrepareNewDevicePairing,
-                            enabled = !state.busy,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.vault_transfer_connect_device))
-                        }
                     }
                     Text(
                         text = state.preparedFileName,
@@ -194,6 +168,13 @@ fun VaultTransferScreen(
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
                         )
+                        OutlinedButton(
+                            onClick = onCopyPairingCode,
+                            enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.vault_transfer_copy_pairing_code))
+                        }
                         Text(
                             text = stringResource(R.string.vault_transfer_pairing_code_instruction),
                             style = MaterialTheme.typography.bodySmall,

@@ -254,6 +254,7 @@ internal object AddressSnapshotMerger {
                     addText(postalCode)
                     addText(country)
                     addText(cardTemplateId)
+                    addText(folderId.orEmpty())
                 }
             }
             is AddressSyncRecordValue.Tombstone -> {

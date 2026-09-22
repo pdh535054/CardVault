@@ -58,6 +58,26 @@ class AddressViewModelTest {
     }
 
     @Test
+    fun detailCopiesEveryAddressPartIndependently() {
+        val fixture = fixture()
+        val id = fixture.repository.seed(fixture.validInput())
+        fixture.reload()
+        fixture.viewModel.loadDetail(id.toString())
+
+        val expected = mapOf(
+            AddressCopyPart.DetailedAddress to "虚构道路 100 号",
+            AddressCopyPart.City to "示例城市",
+            AddressCopyPart.Other to "虚构楼层",
+            AddressCopyPart.PostalCode to "TEST-100",
+            AddressCopyPart.Country to "示例国家",
+        )
+        expected.forEach { (part, value) ->
+            assertTrue(fixture.viewModel.copyAddress(id, part))
+            assertEquals(value, fixture.clipboard.value)
+        }
+    }
+
+    @Test
     fun backgroundClearsAddressStateAndOwnedClipboard() {
         val fixture = fixture()
         val id = fixture.repository.seed(fixture.validInput())

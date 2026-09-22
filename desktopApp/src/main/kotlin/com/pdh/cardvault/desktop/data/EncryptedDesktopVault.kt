@@ -27,7 +27,13 @@ class EncryptedDesktopVault(
     @Synchronized
     fun load(): DesktopVaultSnapshot {
         Files.createDirectories(directory)
-        if (!Files.exists(dataFile)) return DesktopVaultSnapshot(emptyList(), revision = 0)
+        if (!Files.exists(dataFile)) {
+            // Verify DPAPI and persist the protected local key before the UI becomes usable.
+            // Previously an empty vault skipped this check, so a packaged-runtime DPAPI
+            // problem was discovered only after a fully verified import tried to save.
+            loadOrCreateKey().fill(0)
+            return DesktopVaultSnapshot(emptyList(), revision = 0)
+        }
         val key = loadOrCreateKey()
         val cleartext = try {
             decrypt(Files.readAllBytes(dataFile), key)

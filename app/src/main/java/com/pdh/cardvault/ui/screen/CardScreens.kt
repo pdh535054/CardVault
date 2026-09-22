@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -57,6 +58,7 @@ import com.pdh.cardvault.presentation.CardDetailUiState
 import com.pdh.cardvault.presentation.CardListItemUiModel
 import com.pdh.cardvault.presentation.CardOperationMessage
 import com.pdh.cardvault.presentation.RevealedCardSecretsUiState
+import com.pdh.cardvault.presentation.VaultFolderUiModel
 import com.pdh.cardvault.ui.card.CardWalletStack
 import com.pdh.cardvault.ui.card.FlippableMaskedCardDetail
 import java.util.UUID
@@ -65,6 +67,8 @@ import java.util.UUID
 @Composable
 fun CardListScreen(
     cards: List<CardListItemUiModel>,
+    folders: List<VaultFolderUiModel>,
+    folderOrder: List<UUID?>,
     sortingInProgress: Boolean,
     operationMessage: CardOperationMessage,
     onBackToHome: () -> Unit,
@@ -73,8 +77,21 @@ fun CardListScreen(
     onOpenTemplates: () -> Unit,
     onCardSelected: (UUID) -> Unit,
     onCardsReordered: (List<UUID>) -> Unit,
+    onFoldersReordered: (List<UUID?>) -> Unit,
+    onCreateFolder: (String) -> Unit,
+    onRenameFolder: (UUID, String) -> Unit,
+    onDeleteFolder: (UUID) -> Unit,
+    onMoveCardToFolder: (UUID, UUID?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var selectedFolderId by remember { mutableStateOf<UUID?>(null) }
+    val folderTargets = remember { mutableMapOf<UUID?, Rect>() }
+    LaunchedEffect(folders) {
+        if (selectedFolderId != null && folders.none { it.id == selectedFolderId }) {
+            selectedFolderId = null
+        }
+    }
+    val visibleCards = cards.filter { it.folderId == selectedFolderId }
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
@@ -103,25 +120,60 @@ fun CardListScreen(
                 }
             }
 
-            if (cards.isEmpty()) {
+            item(key = "folder-shelf") {
+                VaultFolderShelf(
+                    folders = folders,
+                    unfiledCount = cards.count { it.folderId == null },
+                    folderOrder = folderOrder,
+                    selectedFolderId = selectedFolderId,
+                    onSelect = { selectedFolderId = it },
+                    onCreate = onCreateFolder,
+                    onRename = onRenameFolder,
+                    onDelete = onDeleteFolder,
+                    onReorder = onFoldersReordered,
+                    onTargetBoundsChanged = { id, bounds -> folderTargets[id] = bounds },
+                )
+            }
+
+            if (visibleCards.isEmpty()) {
                 item(key = "empty-state") {
                     EmptyCardState()
                 }
             } else {
                 item(key = "wallet-stack") {
                     CardWalletStack(
-                        cards = cards,
+                        cards = visibleCards,
                         sortingInProgress = sortingInProgress,
                         openActionLabel = stringResource(R.string.action_open_card_detail),
                         moveUpActionLabel = stringResource(R.string.action_move_up),
                         moveDownActionLabel = stringResource(R.string.action_move_down),
                         onCardOpened = onCardSelected,
-                        onCardsReordered = onCardsReordered,
+                        onCardsReordered = { orderedVisibleIds ->
+                            onCardsReordered(mergeVisibleOrder(cards, orderedVisibleIds))
+                        },
+                        onCardDropped = { cardId, position ->
+                            val target = folderTargets.entries
+                                .firstOrNull { (_, bounds) -> bounds.contains(position) }
+                            val currentFolder = cards.firstOrNull { it.id == cardId }?.folderId
+                            if (target != null && target.key != currentFolder) {
+                                onMoveCardToFolder(cardId, target.key)
+                                true
+                            } else false
+                        },
                     )
                 }
             }
         }
     }
+}
+
+private fun mergeVisibleOrder(
+    allCards: List<CardListItemUiModel>,
+    orderedVisibleIds: List<UUID>,
+): List<UUID> {
+    val visible = orderedVisibleIds.iterator()
+    val visibleSet = orderedVisibleIds.toSet()
+    return allCards.map { card -> if (card.id in visibleSet) visible.next() else card.id }
 }
 
 @Composable

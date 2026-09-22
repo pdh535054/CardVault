@@ -23,6 +23,7 @@ internal class CardVaultPersistentGraph(
     val syncCoordinator = AndroidVaultSyncCoordinator(
         cardDao = database.cardDao(),
         addressDao = database.addressDao(),
+        folderDao = database.vaultFolderDao(),
         syncStateDao = database.syncStateDao(),
         repository = repository,
         validator = validator,

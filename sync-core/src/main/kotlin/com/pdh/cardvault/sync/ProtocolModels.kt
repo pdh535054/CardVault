@@ -9,10 +9,13 @@ object SyncProtocolLimits {
     const val FILE_BYTES: Int = 4 * 1024 * 1024
     const val CARD_PAYLOAD_BYTES: Int = 8 * 1024
     const val ADDRESS_PAYLOAD_BYTES: Int = 16 * 1024
+    const val FOLDER_PAYLOAD_BYTES: Int = 1024
     const val ACTIVE_CARDS: Int = 256
     const val ACTIVE_ADDRESSES: Int = 256
     const val RECORDS: Int = 1024
     const val ADDRESS_RECORDS: Int = 1024
+    const val ACTIVE_FOLDERS: Int = 128
+    const val FOLDER_RECORDS: Int = 512
     const val DEVICES_PER_VECTOR: Int = 16
     const val RECENT_PACKAGE_IDS: Int = 1024
 }
@@ -152,9 +155,10 @@ data class CardSyncPayload(
     val cvv: String?,
     val cardTemplateId: String,
     val notes: String,
+    val folderId: String? = null,
 ) {
     init {
-        require(schemaVersion == 1) { "Invalid card exchange data." }
+        require(schemaVersion in 1..2) { "Invalid card exchange data." }
         require(nickname == nickname.trim() && nickname.codePointLength() in 1..50) {
             "Invalid card exchange data."
         }
@@ -178,6 +182,7 @@ data class CardSyncPayload(
             "Invalid card exchange data."
         }
         require(notes.codePointLength() <= 1000) { "Invalid card exchange data." }
+        folderId?.let(ProtocolValidation::requireUuid)
     }
 
     override fun toString(): String = "CardSyncPayload(sensitiveFields=redacted)"
@@ -197,9 +202,10 @@ data class AddressSyncPayload(
     val postalCode: String,
     val country: String,
     val cardTemplateId: String,
+    val folderId: String? = null,
 ) {
     init {
-        require(schemaVersion == 1) { "Invalid address exchange data." }
+        require(schemaVersion in 1..2) { "Invalid address exchange data." }
         require(nickname == nickname.trim() && nickname.codePointLength() in 1..50) {
             "Invalid address exchange data."
         }
@@ -222,6 +228,7 @@ data class AddressSyncPayload(
         require(cardTemplateId.isNotBlank() && cardTemplateId.length <= 400) {
             "Invalid address exchange data."
         }
+        folderId?.let(ProtocolValidation::requireUuid)
     }
 
     override fun toString(): String = "AddressSyncPayload(sensitiveFields=redacted)"
@@ -354,11 +361,90 @@ data class AddressSyncSnapshot(
     }
 }
 
+enum class FolderCollectionKind {
+    CARDS,
+    ADDRESSES,
+}
+
+data class FolderSyncPayload(
+    val schemaVersion: Int = 1,
+    val collection: FolderCollectionKind,
+    val name: String,
+) {
+    init {
+        require(schemaVersion == 1) { "Invalid folder exchange data." }
+        require(name == name.trim() && name.codePointLength() in 1..50) {
+            "Invalid folder exchange data."
+        }
+    }
+
+    override fun toString(): String = "FolderSyncPayload(name=redacted, collection=$collection)"
+}
+
+sealed interface FolderSyncRecordValue {
+    data class Active(
+        val payload: FolderSyncPayload,
+        val createdAtEpochMillis: Long,
+        val updatedAtEpochMillis: Long,
+    ) : FolderSyncRecordValue {
+        init {
+            require(createdAtEpochMillis >= 0L && updatedAtEpochMillis >= createdAtEpochMillis) {
+                "Invalid folder exchange metadata."
+            }
+        }
+
+        override fun toString(): String =
+            "Active(payload=redacted, createdAt=$createdAtEpochMillis, updatedAt=$updatedAtEpochMillis)"
+    }
+
+    data class Tombstone(val deletedAtEpochMillis: Long) : FolderSyncRecordValue {
+        init {
+            require(deletedAtEpochMillis >= 0L) { "Invalid folder exchange metadata." }
+        }
+    }
+}
+
+data class FolderSyncRecord(
+    val recordId: String,
+    val version: VersionVector,
+    val value: FolderSyncRecordValue,
+) {
+    init {
+        ProtocolValidation.requireUuid(recordId)
+        require(!version.isEmpty) { "Invalid folder exchange metadata." }
+    }
+
+    override fun toString(): String =
+        "FolderSyncRecord(recordId=$recordId, version=$version, value=$value)"
+}
+
+data class FolderSyncSnapshot(
+    val records: List<FolderSyncRecord>,
+) {
+    init {
+        require(records.size <= SyncProtocolLimits.FOLDER_RECORDS) {
+            "Invalid folder snapshot metadata."
+        }
+        val recordIds = records.map(FolderSyncRecord::recordId)
+        require(recordIds.distinct().size == recordIds.size) {
+            "Invalid folder snapshot metadata."
+        }
+        require(records.count { it.value is FolderSyncRecordValue.Active } <= SyncProtocolLimits.ACTIVE_FOLDERS) {
+            "Invalid folder snapshot metadata."
+        }
+    }
+
+    override fun toString(): String =
+        "FolderSyncSnapshot(records=${records.size})"
+}
+
 data class SyncSnapshot(
     val records: List<SyncRecord>,
     val order: SyncOrder,
     /** null means a legacy v1 package that did not carry an address collection. */
     val addresses: AddressSyncSnapshot? = null,
+    /** null means a legacy v1/v2 package that did not carry folders or membership. */
+    val folders: FolderSyncSnapshot? = null,
 ) {
     init {
         require(records.size <= SyncProtocolLimits.RECORDS) { "Invalid snapshot metadata." }
@@ -372,7 +458,8 @@ data class SyncSnapshot(
 
     override fun toString(): String =
         "SyncSnapshot(records=${records.size}, active=${order.recordIds.size}, " +
-            "addresses=${addresses?.records?.size ?: "not-included"})"
+            "addresses=${addresses?.records?.size ?: "not-included"}, " +
+            "folders=${folders?.records?.size ?: "not-included"})"
 }
 
 data class PairingFilePayload(

@@ -333,8 +333,6 @@ fun CardVaultApp(
                             mainViewModel::requestStartupAuthenticationChange,
                         vaultTransferUiState = vaultTransferUiState,
                         onPrepareVaultExport = vaultTransferViewModel::requestExport,
-                        onPrepareNewDevicePairing =
-                            vaultTransferViewModel::requestNewDevicePairing,
                         onRotateVaultSyncKey =
                             vaultTransferViewModel::requestSyncKeyRotation,
                         onSharePreparedVaultExport = {
@@ -354,6 +352,11 @@ fun CardVaultApp(
                                 vaultTransferViewModel.onShareDispatchFailed()
                             }
                         },
+                        onCopyVaultPairingCode = {
+                            vaultTransferViewModel.copyPreparedPairingCode(
+                                sensitiveClipboardController::copySensitiveText,
+                            )
+                        },
                         onVaultImportUriSelected = vaultTransferViewModel::onImportUriSelected,
                         onVaultPairingCodeChanged = vaultTransferViewModel::updatePairingCode,
                         onConfirmVaultPairingImport =
@@ -366,9 +369,16 @@ fun CardVaultApp(
                         onClearAddressForm = addressViewModel::clearForm,
                         onLoadAddressDetail = addressViewModel::loadDetail,
                         onClearAddressDetail = addressViewModel::clearDetail,
-                        onCopyAddress = { id -> addressViewModel.copyAddress(id) },
+                        onCopyAddress = { id, part -> addressViewModel.copyAddress(id, part) },
                         onDeleteAddress = { id -> addressViewModel.deleteAddress(id) },
                         onAddressesReordered = addressViewModel::reorderAddresses,
+                        onAddressFoldersReordered = addressViewModel::reorderFolders,
+                        onCreateAddressFolder = { addressViewModel.createFolder(it) },
+                        onRenameAddressFolder = { id, name -> addressViewModel.renameFolder(id, name) },
+                        onDeleteAddressFolder = { addressViewModel.deleteFolder(it) },
+                        onMoveAddressToFolder = { id, folderId ->
+                            addressViewModel.moveAddressToFolder(id, folderId)
+                        },
                         onLoadAddressEdit = addressViewModel::loadEdit,
                         onAddressEditFieldChanged = addressViewModel::updateEditField,
                         onAddressEditTemplateSelected = addressViewModel::selectEditTemplate,
@@ -395,6 +405,13 @@ fun CardVaultApp(
                         },
                         onCardsReordered = { orderedIds ->
                             cardsViewModel.reorderCards(orderedIds)
+                        },
+                        onCardFoldersReordered = cardsViewModel::reorderFolders,
+                        onCreateCardFolder = { cardsViewModel.createFolder(it) },
+                        onRenameCardFolder = { id, name -> cardsViewModel.renameFolder(id, name) },
+                        onDeleteCardFolder = { cardsViewModel.deleteFolder(it) },
+                        onMoveCardToFolder = { id, folderId ->
+                            cardsViewModel.moveCardToFolder(id, folderId)
                         },
                         onRequestCardAuthentication = requestCardAuthentication,
                         onHideCardSecrets = cardsViewModel::hideRevealedCardSecrets,

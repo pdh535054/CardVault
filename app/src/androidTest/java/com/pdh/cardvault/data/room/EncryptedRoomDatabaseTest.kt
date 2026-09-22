@@ -304,6 +304,7 @@ class EncryptedRoomDatabaseTest {
         EncryptedRoomBankCardRepository(
             cardDao = database.cardDao(),
             addressDao = database.addressDao(),
+            folderDao = database.vaultFolderDao(),
             metadataDao = database.vaultMetadataDao(),
             syncStateDao = database.syncStateDao(),
             validator = BankCardValidator { templateId ->

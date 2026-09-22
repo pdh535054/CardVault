@@ -43,7 +43,7 @@ class CardRecordCryptor internal constructor(
     ): CardPayload {
         if (
             encryptedRecord.cryptoVersion != CURRENT_CRYPTO_VERSION ||
-            encryptedRecord.payloadSchemaVersion != payloadCodec.currentSchemaVersion
+            !payloadCodec.isSupportedSchemaVersion(encryptedRecord.payloadSchemaVersion)
         ) {
             throw UnsupportedCryptoVersionException()
         }

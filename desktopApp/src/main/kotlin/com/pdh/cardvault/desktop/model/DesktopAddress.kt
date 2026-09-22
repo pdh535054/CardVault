@@ -3,6 +3,15 @@ package com.pdh.cardvault.desktop.model
 import java.time.Clock
 import java.util.UUID
 
+enum class DesktopAddressCopyPart {
+    Complete,
+    DetailedAddress,
+    City,
+    Other,
+    PostalCode,
+    Country,
+}
+
 data class DesktopAddress(
     val id: String,
     val nickname: String,
@@ -15,6 +24,7 @@ data class DesktopAddress(
     val sortOrder: Int,
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
+    val folderId: String? = null,
 ) {
     init {
         require(runCatching { UUID.fromString(id) }.isSuccess) { "地址记录无效。" }
@@ -29,13 +39,21 @@ data class DesktopAddress(
         require(sortOrder >= 0 && createdAtEpochMillis >= 0 && updatedAtEpochMillis >= createdAtEpochMillis) {
             "地址记录无效。"
         }
+        require(folderId == null || runCatching { UUID.fromString(folderId) }.isSuccess) { "地址记录无效。" }
     }
 
     val style: CardCoverStyle get() = AndroidTemplateStyleCodec.decode(cardTemplateId)
 
-    fun copyText(): String = listOf(detailedAddress, other, city, postalCode, country)
-        .filter(String::isNotBlank)
-        .joinToString("\n")
+    fun copyText(part: DesktopAddressCopyPart = DesktopAddressCopyPart.Complete): String = when (part) {
+        DesktopAddressCopyPart.Complete -> listOf(detailedAddress, other, city, postalCode, country)
+            .filter(String::isNotBlank)
+            .joinToString("\n")
+        DesktopAddressCopyPart.DetailedAddress -> detailedAddress
+        DesktopAddressCopyPart.City -> city
+        DesktopAddressCopyPart.Other -> other
+        DesktopAddressCopyPart.PostalCode -> postalCode
+        DesktopAddressCopyPart.Country -> country
+    }
 
     override fun toString(): String = "DesktopAddress(id=$id, sensitiveFields=redacted)"
 

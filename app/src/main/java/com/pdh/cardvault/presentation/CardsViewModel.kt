@@ -8,6 +8,9 @@ import com.pdh.cardvault.data.room.PersistentBankCardRepository
 import com.pdh.cardvault.data.room.PersistentCardDetail
 import com.pdh.cardvault.data.room.PersistentCardListItem
 import com.pdh.cardvault.data.room.PersistentCardSecrets
+import com.pdh.cardvault.data.room.PersistentVaultFolderRepository
+import com.pdh.cardvault.data.room.PersistentVaultFolder
+import com.pdh.cardvault.data.room.VaultFolderKind
 import com.pdh.cardvault.domain.model.BankCardInput
 import com.pdh.cardvault.domain.model.CardNetwork
 import com.pdh.cardvault.domain.validation.BankCardValidationError
@@ -78,8 +81,17 @@ data class CardListItemUiModel(
     val issuerName: String,
     val cardTemplateId: String,
     val cardNetwork: CardNetwork?,
+    val folderId: UUID? = null,
 ) {
     override fun toString(): String = "CardListItemUiModel(sensitiveFields=redacted)"
+}
+
+data class VaultFolderUiModel(
+    val id: UUID,
+    val name: String,
+    val itemCount: Int,
+) {
+    override fun toString(): String = "VaultFolderUiModel(name=redacted, itemCount=$itemCount)"
 }
 
 enum class CvvSaveStatusUi {
@@ -181,6 +193,8 @@ sealed interface CardNavigationEvent {
 data class CardsUiState(
     val vaultContentState: VaultContentState,
     val cards: List<CardListItemUiModel>,
+    val folders: List<VaultFolderUiModel> = emptyList(),
+    val folderOrder: List<UUID?> = listOf(null),
     val form: CardFormUiState,
     val isSorting: Boolean,
     val sortingInProgress: Boolean,
@@ -226,6 +240,7 @@ class CardsViewModel internal constructor(
     private val expirationScheduler: SensitiveExpirationScheduler =
         CoroutineSensitiveExpirationScheduler,
 ) : ViewModel() {
+    private val folderRepository = repository as? PersistentVaultFolderRepository
     private var lifecycleEpoch = 0L
     private var revealGeneration = 0L
     private var activeDetailRecordId: UUID? = null
@@ -239,6 +254,7 @@ class CardsViewModel internal constructor(
     private var authenticatedJob: Job? = null
     private var editSaveJob: Job? = null
     private var sortJob: Job? = null
+    private var folderOrderJob: Job? = null
     private var revealedSecretsExpiration: Job? = null
 
     private val workScope: CoroutineScope
@@ -248,6 +264,7 @@ class CardsViewModel internal constructor(
         CardsUiState(
             vaultContentState = VaultContentState.Locked,
             cards = emptyList(),
+            folders = emptyList(),
             form = emptyForm(),
             isSorting = false,
             sortingInProgress = false,
@@ -283,11 +300,15 @@ class CardsViewModel internal constructor(
             try {
                 repository.unlockOrCreateVault()
                 val cards = repository.getList().map(PersistentCardListItem::toUiModel)
+                val folders = loadFolders(cards)
+                val folderOrder = loadFolderOrder()
                 if (!isCurrentEpoch(expectedEpoch)) return@launch
                 _uiState.update { state ->
                     state.copy(
                         vaultContentState = VaultContentState.Ready,
                         cards = cards,
+                        folders = folders,
+                        folderOrder = folderOrder,
                         operationMessage = CardOperationMessage.None,
                     )
                 }
@@ -327,6 +348,7 @@ class CardsViewModel internal constructor(
         _uiState.value = CardsUiState(
             vaultContentState = VaultContentState.Locked,
             cards = emptyList(),
+            folders = emptyList(),
             form = emptyForm(),
             isSorting = false,
             sortingInProgress = false,
@@ -362,12 +384,16 @@ class CardsViewModel internal constructor(
         vaultJob = workScope.launch {
             try {
                 val cards = repository.getList().map(PersistentCardListItem::toUiModel)
+                val folders = loadFolders(cards)
+                val folderOrder = loadFolderOrder()
                 if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
                 clearSensitiveValues()
                 activeDetailRecordId = null
                 _uiState.update { current ->
                     current.copy(
                         cards = cards,
+                        folders = folders,
+                        folderOrder = folderOrder,
                         detail = CardDetailUiState.Hidden,
                         edit = CardEditUiState.Hidden,
                         isSorting = false,
@@ -820,6 +846,62 @@ class CardsViewModel internal constructor(
         return persistReorderedCards(original = state.cards, reordered = reordered)
     }
 
+    fun createFolder(name: String): Boolean = runFolderOperation {
+        createFolder(VaultFolderKind.CARDS, name)
+    }
+
+    fun reorderFolders(orderedIds: List<UUID?>): Boolean {
+        val folders = folderRepository ?: return false
+        val state = _uiState.value
+        if (
+            state.vaultContentState != VaultContentState.Ready ||
+            !repository.isUnlocked() ||
+            orderedIds == state.folderOrder ||
+            orderedIds.size != state.folders.size + 1 ||
+            orderedIds.count { it == null } != 1 ||
+            orderedIds.filterNotNull().toSet() != state.folders.map(VaultFolderUiModel::id).toSet()
+        ) {
+            return false
+        }
+        val previousOrder = state.folderOrder
+        val expectedEpoch = lifecycleEpoch
+        _uiState.update { it.copy(folderOrder = orderedIds) }
+        folderOrderJob?.cancel()
+        folderOrderJob = workScope.launch {
+            try {
+                folders.reorderFolders(VaultFolderKind.CARDS, orderedIds)
+                val refreshedFolders = loadFolders(_uiState.value.cards)
+                val refreshedOrder = loadFolderOrder()
+                if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
+                _uiState.update { it.copy(folders = refreshedFolders, folderOrder = refreshedOrder) }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                if (isCurrentReadyEpoch(expectedEpoch)) {
+                    _uiState.update {
+                        it.copy(
+                            folderOrder = previousOrder,
+                            operationMessage = CardOperationMessage.StorageFailed,
+                        )
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    fun renameFolder(folderId: UUID, name: String): Boolean = runFolderOperation {
+        if (!renameFolder(folderId, name)) throw IllegalStateException()
+    }
+
+    fun deleteFolder(folderId: UUID): Boolean = runFolderOperation {
+        if (!deleteFolder(folderId)) throw IllegalStateException()
+    }
+
+    fun moveCardToFolder(cardId: UUID, folderId: UUID?): Boolean = runFolderOperation {
+        if (!moveCardToFolder(cardId, folderId)) throw IllegalStateException()
+    }
+
     fun onNavigationEventHandled(event: CardNavigationEvent) {
         _uiState.update { current ->
             if (current.navigationEvent == event) current.copy(navigationEvent = null) else current
@@ -852,6 +934,43 @@ class CardsViewModel internal constructor(
             else -> Unit
         }
     }
+
+    private fun runFolderOperation(
+        operation: suspend PersistentVaultFolderRepository.() -> Unit,
+    ): Boolean {
+        val folders = folderRepository ?: return false
+        if (_uiState.value.vaultContentState != VaultContentState.Ready || !repository.isUnlocked()) {
+            return false
+        }
+        val expectedEpoch = lifecycleEpoch
+        workScope.launch {
+            try {
+                folders.operation()
+                val cards = repository.getList().map(PersistentCardListItem::toUiModel)
+                val refreshedFolders = loadFolders(cards)
+                val refreshedOrder = loadFolderOrder()
+                if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
+                _uiState.update {
+                    it.copy(cards = cards, folders = refreshedFolders, folderOrder = refreshedOrder)
+                }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                if (isCurrentReadyEpoch(expectedEpoch)) {
+                    _uiState.update { it.copy(operationMessage = CardOperationMessage.StorageFailed) }
+                }
+            }
+        }
+        return true
+    }
+
+    private suspend fun loadFolders(cards: List<CardListItemUiModel>): List<VaultFolderUiModel> =
+        folderRepository?.getFolders(VaultFolderKind.CARDS)?.map { folder ->
+            folder.toUiModel(cards.count { it.folderId == folder.id })
+        }.orEmpty()
+
+    private suspend fun loadFolderOrder(): List<UUID?> =
+        folderRepository?.getFolderOrder(VaultFolderKind.CARDS) ?: listOf(null)
 
     private fun revealCardSecrets(scope: AuthenticationScope) {
         val recordId = requireNotNull(scope.recordId)
@@ -1089,6 +1208,7 @@ class CardsViewModel internal constructor(
             authenticatedJob,
             editSaveJob,
             sortJob,
+            folderOrderJob,
             revealedSecretsExpiration,
         ).forEach { job -> job?.cancel() }
         vaultJob = null
@@ -1098,6 +1218,7 @@ class CardsViewModel internal constructor(
         authenticatedJob = null
         editSaveJob = null
         sortJob = null
+        folderOrderJob = null
         revealedSecretsExpiration = null
     }
 
@@ -1307,7 +1428,11 @@ private fun PersistentCardListItem.toUiModel(): CardListItemUiModel = CardListIt
     issuerName = issuerName,
     cardTemplateId = cardTemplateId,
     cardNetwork = cardNetwork,
+    folderId = folderId,
 )
+
+private fun PersistentVaultFolder.toUiModel(itemCount: Int): VaultFolderUiModel =
+    VaultFolderUiModel(id = id, name = name, itemCount = itemCount)
 
 private fun PersistentCardDetail.toUiModel(): CardDetailUiModel = CardDetailUiModel(
     nickname = nickname,

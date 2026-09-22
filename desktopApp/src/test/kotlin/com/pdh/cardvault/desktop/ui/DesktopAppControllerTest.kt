@@ -8,6 +8,8 @@ import com.pdh.cardvault.desktop.model.DesktopCard
 import com.pdh.cardvault.desktop.security.SensitiveAction
 import com.pdh.cardvault.desktop.security.SensitiveActionAuthenticator
 import com.pdh.cardvault.desktop.sync.SyncCoreDesktopGateway
+import com.pdh.cardvault.sync.SyncFileKind
+import com.pdh.cardvault.sync.PairingCode
 import java.nio.file.Files
 import java.time.Clock
 import java.time.Instant
@@ -119,6 +121,160 @@ class DesktopAppControllerTest {
         assertTrue(controller.addresses.isEmpty())
         assertEquals(listOf(SensitiveAction.EditAddress, SensitiveAction.DeleteAddress), authenticator.actions)
         controller.close()
+    }
+
+    @Test
+    fun `android compatible pairing file can be selected and imported with visible result`() = runBlocking {
+        val sourceRepository = DesktopCardRepository(
+            EncryptedDesktopVault(Files.createTempDirectory("cardvault-transfer-source"), TestKeyProtector()),
+            clock,
+        )
+        sourceRepository.add(
+            DesktopCard.create(
+                nickname = "虚构同步卡",
+                issuerName = "虚构发行方",
+                cardNumber = "8".repeat(19),
+                expiryMonth = 12,
+                expiryYear = 2099,
+                cvv = "8".repeat(3),
+                notes = "自动化测试",
+                style = CardCoverStyle.Default,
+                sortOrder = 0,
+                clock = clock,
+            ),
+        )
+        val gateway = SyncCoreDesktopGateway(clock)
+        val exported = gateway.export(sourceRepository.snapshot(), newPairing = true)
+        val transferFile = Files.createTempDirectory("cardvault-transfer-file")
+            .resolve(exported.suggestedFileName)
+        Files.write(transferFile, exported.bytes)
+        exported.bytes.fill(0)
+
+        val targetController = DesktopAppController(
+            repository = DesktopCardRepository(
+                EncryptedDesktopVault(Files.createTempDirectory("cardvault-transfer-target"), TestKeyProtector()),
+                clock,
+            ),
+            syncGateway = SyncCoreDesktopGateway(clock),
+            clock = clock,
+            authenticator = RecordingAuthenticator(accepted = true),
+        )
+
+        assertTrue(targetController.selectImportFile(transferFile))
+        assertEquals(SyncFileKind.PAIRING, targetController.selectedImportKind)
+        assertTrue(
+            targetController.importSelected(exported.pairingCode),
+            targetController.transferFeedback?.text,
+        )
+        assertEquals("虚构同步卡", targetController.cards.single().nickname)
+        assertTrue(targetController.transferFeedback?.text?.startsWith("导入完成") == true)
+        assertFalse(targetController.transferFeedback?.isError == true)
+        assertEquals(null, targetController.selectedImportPath)
+
+        targetController.close()
+        sourceRepository.close()
+    }
+
+    @Test
+    fun `pairing import without code stays selected and explains next step`() = runBlocking {
+        val sourceRepository = DesktopCardRepository(
+            EncryptedDesktopVault(Files.createTempDirectory("cardvault-code-source"), TestKeyProtector()),
+            clock,
+        )
+        val gateway = SyncCoreDesktopGateway(clock)
+        val exported = gateway.export(sourceRepository.snapshot(), newPairing = true)
+        val transferFile = Files.createTempDirectory("cardvault-code-file")
+            .resolve(exported.suggestedFileName)
+        Files.write(transferFile, exported.bytes)
+        exported.bytes.fill(0)
+        val authenticator = RecordingAuthenticator(accepted = true)
+        val targetController = DesktopAppController(
+            repository = DesktopCardRepository(
+                EncryptedDesktopVault(Files.createTempDirectory("cardvault-code-target"), TestKeyProtector()),
+                clock,
+            ),
+            syncGateway = SyncCoreDesktopGateway(clock),
+            clock = clock,
+            authenticator = authenticator,
+        )
+
+        assertTrue(targetController.selectImportFile(transferFile))
+        assertFalse(targetController.importSelected(""))
+        assertTrue(targetController.transferFeedback?.isError == true)
+        assertTrue(targetController.transferFeedback?.text?.contains("配对码") == true)
+        assertEquals(transferFile.toAbsolutePath().normalize(), targetController.selectedImportPath)
+        assertTrue(authenticator.actions.isEmpty())
+
+        targetController.close()
+        sourceRepository.close()
+    }
+
+    @Test
+    fun `wrong pairing code reports a stable safe diagnostic without changing local data`() = runBlocking {
+        val sourceRepository = DesktopCardRepository(
+            EncryptedDesktopVault(Files.createTempDirectory("cardvault-wrong-code-source"), TestKeyProtector()),
+            clock,
+        )
+        val exported = SyncCoreDesktopGateway(clock).export(sourceRepository.snapshot(), newPairing = true)
+        val transferFile = Files.createTempDirectory("cardvault-wrong-code-file")
+            .resolve(exported.suggestedFileName)
+        Files.write(transferFile, exported.bytes)
+        exported.bytes.fill(0)
+        val wrongCode = PairingCode.generate().use { it.displayCode }
+        val targetController = DesktopAppController(
+            repository = DesktopCardRepository(
+                EncryptedDesktopVault(Files.createTempDirectory("cardvault-wrong-code-target"), TestKeyProtector()),
+                clock,
+            ),
+            syncGateway = SyncCoreDesktopGateway(clock),
+            clock = clock,
+            authenticator = RecordingAuthenticator(accepted = true),
+        )
+
+        assertTrue(targetController.selectImportFile(transferFile))
+        assertFalse(targetController.importSelected(wrongCode))
+        assertTrue(targetController.cards.isEmpty())
+        assertTrue(targetController.transferFeedback?.text?.contains("CV-I202") == true)
+        assertTrue(targetController.transferFeedback?.isError == true)
+
+        targetController.close()
+        sourceRepository.close()
+    }
+
+    @Test
+    fun `unpaired computer rejects daily sync file with pairing instructions before authentication`() = runBlocking {
+        val sourceRepository = DesktopCardRepository(
+            EncryptedDesktopVault(Files.createTempDirectory("cardvault-sync-source"), TestKeyProtector()),
+            clock,
+        )
+        val gateway = SyncCoreDesktopGateway(clock)
+        val pairing = gateway.export(sourceRepository.snapshot(), newPairing = true)
+        val sync = gateway.export(pairing.snapshotAfterExport, newPairing = false)
+        pairing.bytes.fill(0)
+        val transferFile = Files.createTempDirectory("cardvault-sync-file")
+            .resolve(sync.suggestedFileName)
+        Files.write(transferFile, sync.bytes)
+        sync.bytes.fill(0)
+        val authenticator = RecordingAuthenticator(accepted = true)
+        val targetController = DesktopAppController(
+            repository = DesktopCardRepository(
+                EncryptedDesktopVault(Files.createTempDirectory("cardvault-sync-target"), TestKeyProtector()),
+                clock,
+            ),
+            syncGateway = SyncCoreDesktopGateway(clock),
+            clock = clock,
+            authenticator = authenticator,
+        )
+
+        assertTrue(targetController.selectImportFile(transferFile))
+        assertEquals(SyncFileKind.SYNC, targetController.selectedImportKind)
+        assertTrue(targetController.transferFeedback?.text?.contains("电脑尚未配对") == true)
+        assertFalse(targetController.importSelected(null))
+        assertTrue(targetController.transferFeedback?.text?.contains(".cvpair") == true)
+        assertTrue(authenticator.actions.isEmpty())
+
+        targetController.close()
+        sourceRepository.close()
     }
 
     private fun controllerWithCard(authenticator: SensitiveActionAuthenticator): DesktopAppController {

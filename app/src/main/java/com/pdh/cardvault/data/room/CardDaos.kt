@@ -379,6 +379,85 @@ internal abstract class AddressDao {
     }
 }
 
+@Dao
+internal abstract class VaultFolderDao {
+    @Query("SELECT * FROM vault_folders ORDER BY createdAt ASC, id ASC")
+    abstract suspend fun getAll(): List<VaultFolderEntity>
+
+    @Query("SELECT * FROM vault_folders WHERE id = :id LIMIT 1")
+    abstract suspend fun getById(id: String): VaultFolderEntity?
+
+    @Query("SELECT * FROM vault_folder_display_order WHERE collection = :collection LIMIT 1")
+    abstract suspend fun getDisplayOrder(collection: String): VaultFolderDisplayOrderEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun upsertDisplayOrder(entity: VaultFolderDisplayOrderEntity)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insert(entity: VaultFolderEntity)
+
+    @Query(
+        """
+        UPDATE vault_folders SET ciphertext = :ciphertext, recordIv = :recordIv,
+            payloadSchemaVersion = :payloadSchemaVersion, cryptoVersion = :cryptoVersion,
+            updatedAt = :updatedAt, versionVector = :versionVector WHERE id = :id
+        """,
+    )
+    protected abstract suspend fun updateEncryptedPayload(
+        id: String,
+        ciphertext: ByteArray,
+        recordIv: ByteArray,
+        payloadSchemaVersion: Int,
+        cryptoVersion: Int,
+        updatedAt: Long,
+        versionVector: ByteArray,
+    ): Int
+
+    @Query("DELETE FROM vault_folders WHERE id = :id")
+    protected abstract suspend fun deleteById(id: String): Int
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertTombstone(entity: FolderSyncTombstoneEntity)
+
+    suspend fun insertLocal(entity: VaultFolderEntity, localDeviceId: String) {
+        insert(entity.copy(versionVector = StoredVersionVectors.initial(localDeviceId)))
+    }
+
+    @Transaction
+    open suspend fun updateLocal(
+        id: String,
+        ciphertext: ByteArray,
+        recordIv: ByteArray,
+        payloadSchemaVersion: Int,
+        cryptoVersion: Int,
+        proposedUpdatedAt: Long,
+        localDeviceId: String,
+    ): Boolean {
+        val existing = getById(id) ?: return false
+        if (existing.updatedAt == Long.MAX_VALUE) throw DatabaseInvariantException()
+        val updatedAt = maxOf(proposedUpdatedAt.coerceAtLeast(0L), existing.updatedAt + 1L)
+        val vector = StoredVersionVectors.increment(existing.versionVector, localDeviceId)
+        if (updateEncryptedPayload(id, ciphertext, recordIv, payloadSchemaVersion, cryptoVersion, updatedAt, vector) != 1) {
+            throw DatabaseInvariantException()
+        }
+        return true
+    }
+
+    @Transaction
+    open suspend fun deleteLocal(id: String, localDeviceId: String, proposedDeletedAt: Long): Boolean {
+        val existing = getById(id) ?: return false
+        insertTombstone(
+            FolderSyncTombstoneEntity(
+                recordId = id,
+                versionVector = StoredVersionVectors.increment(existing.versionVector, localDeviceId),
+                deletedAt = maxOf(proposedDeletedAt.coerceAtLeast(0L), existing.updatedAt),
+            ),
+        )
+        if (deleteById(id) != 1) throw DatabaseInvariantException()
+        return true
+    }
+}
+
 private fun List<AddressEntity>.requireContinuousAddressOrder() {
     if (map(AddressEntity::sortOrder) != indices.toList()) throw DatabaseInvariantException()
 }
@@ -417,6 +496,9 @@ internal abstract class SyncStateDao {
 
     @Query("SELECT * FROM address_sync_tombstones ORDER BY recordId ASC")
     abstract suspend fun getAddressTombstones(): List<AddressSyncTombstoneEntity>
+
+    @Query("SELECT * FROM folder_sync_tombstones ORDER BY recordId ASC")
+    abstract suspend fun getFolderTombstones(): List<FolderSyncTombstoneEntity>
 
     @Query(
         """
@@ -481,6 +563,12 @@ internal abstract class SyncStateDao {
         entities: List<AddressSyncTombstoneEntity>,
     )
 
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertFolders(entities: List<VaultFolderEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertFolderTombstones(entities: List<FolderSyncTombstoneEntity>)
+
     @Query("DELETE FROM cards")
     protected abstract suspend fun deleteAllCards()
 
@@ -492,6 +580,18 @@ internal abstract class SyncStateDao {
 
     @Query("DELETE FROM address_sync_tombstones")
     protected abstract suspend fun deleteAllAddressTombstones()
+
+    @Query("DELETE FROM vault_folders")
+    protected abstract suspend fun deleteAllFolders()
+
+    @Query("DELETE FROM folder_sync_tombstones")
+    protected abstract suspend fun deleteAllFolderTombstones()
+
+    @Query("DELETE FROM imported_sync_packages")
+    protected abstract suspend fun deleteAllImportedPackages()
+
+    @Query("DELETE FROM sync_source_sequences")
+    protected abstract suspend fun deleteAllSourceSequences()
 
     @Query(
         """
@@ -655,8 +755,11 @@ internal abstract class SyncStateDao {
         addresses: List<AddressEntity>,
         addressTombstones: List<AddressSyncTombstoneEntity>,
         addressOrder: AddressSyncOrderStateEntity,
+        folders: List<VaultFolderEntity>,
+        folderTombstones: List<FolderSyncTombstoneEntity>,
         vaultState: SyncVaultStateEntity,
         importedPackage: ImportedSyncPackageEntity,
+        resetReplayHistory: Boolean = false,
     ) {
         val currentVaultState = getVaultState() ?: throw DatabaseInvariantException()
         cards.requireContinuousOrder()
@@ -665,6 +768,8 @@ internal abstract class SyncStateDao {
         val tombstoneIds = tombstones.map(SyncTombstoneEntity::recordId)
         val activeAddressIds = addresses.map(AddressEntity::id)
         val addressTombstoneIds = addressTombstones.map(AddressSyncTombstoneEntity::recordId)
+        val folderIds = folders.map(VaultFolderEntity::id)
+        val folderTombstoneIds = folderTombstones.map(FolderSyncTombstoneEntity::recordId)
         if (
             activeIds.toSet().size != activeIds.size ||
             tombstoneIds.toSet().size != tombstoneIds.size ||
@@ -678,9 +783,18 @@ internal abstract class SyncStateDao {
             addresses.any { it.versionVector.isEmpty() } ||
             addressTombstones.any { it.versionVector.isEmpty() } ||
             addressOrder.versionVector.isEmpty() ||
+            folderIds.toSet().size != folderIds.size ||
+            folderTombstoneIds.toSet().size != folderTombstoneIds.size ||
+            folderIds.toSet().intersect(folderTombstoneIds.toSet()).isNotEmpty() ||
+            folders.any { it.versionVector.isEmpty() } ||
+            folderTombstones.any { it.versionVector.isEmpty() } ||
             vaultState.deviceId != currentVaultState.deviceId
         ) {
             throw DatabaseInvariantException()
+        }
+        if (resetReplayHistory) {
+            deleteAllImportedPackages()
+            deleteAllSourceSequences()
         }
         if (hasImportedPackage(importedPackage.packageId)) {
             throw DuplicateSyncPackageException()
@@ -697,10 +811,14 @@ internal abstract class SyncStateDao {
         deleteAllTombstones()
         deleteAllAddresses()
         deleteAllAddressTombstones()
+        deleteAllFolders()
+        deleteAllFolderTombstones()
         if (cards.isNotEmpty()) insertCards(cards)
         if (tombstones.isNotEmpty()) insertTombstones(tombstones)
         if (addresses.isNotEmpty()) insertAddresses(addresses)
         if (addressTombstones.isNotEmpty()) insertAddressTombstones(addressTombstones)
+        if (folders.isNotEmpty()) insertFolders(folders)
+        if (folderTombstones.isNotEmpty()) insertFolderTombstones(folderTombstones)
         replaceOrderState(order)
         replaceAddressOrderState(addressOrder)
         replaceVaultState(vaultState)

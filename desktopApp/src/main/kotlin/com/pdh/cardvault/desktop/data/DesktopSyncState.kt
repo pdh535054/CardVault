@@ -72,6 +72,8 @@ data class DesktopSyncState(
     val addressRecordVectors: Map<String, VersionVector> = emptyMap(),
     val addressTombstones: Map<String, DesktopTombstone> = emptyMap(),
     val addressOrderVector: VersionVector = VersionVector(mapOf(deviceId to 1L)),
+    val folderRecordVectors: Map<String, VersionVector> = emptyMap(),
+    val folderTombstones: Map<String, DesktopTombstone> = emptyMap(),
     val recentPackageIds: List<String> = emptyList(),
     val replaySequences: Map<String, Long> = emptyMap(),
 ) {
@@ -81,13 +83,15 @@ data class DesktopSyncState(
         require(keyEpoch in 0..Int.MAX_VALUE.toLong() && exportSequence >= 0) { "同步状态无效。" }
         require(
             recordVectors.size <= 1_024 && tombstones.size <= 1_024 &&
-                addressRecordVectors.size <= 1_024 && addressTombstones.size <= 1_024,
+                addressRecordVectors.size <= 1_024 && addressTombstones.size <= 1_024 &&
+                folderRecordVectors.size <= 512 && folderTombstones.size <= 512,
         ) { "同步状态无效。" }
-        require((recordVectors.keys + addressRecordVectors.keys).all { runCatching { UUID.fromString(it) }.isSuccess }) {
+        require((recordVectors.keys + addressRecordVectors.keys + folderRecordVectors.keys).all { runCatching { UUID.fromString(it) }.isSuccess }) {
             "同步状态无效。"
         }
         require(tombstones.all { (id, tombstone) -> id == tombstone.recordId }) { "同步状态无效。" }
         require(addressTombstones.all { (id, tombstone) -> id == tombstone.recordId }) { "同步状态无效。" }
+        require(folderTombstones.all { (id, tombstone) -> id == tombstone.recordId }) { "同步状态无效。" }
         require(recentPackageIds.size <= 64 && recentPackageIds.all { runCatching { UUID.fromString(it) }.isSuccess }) {
             "同步状态无效。"
         }

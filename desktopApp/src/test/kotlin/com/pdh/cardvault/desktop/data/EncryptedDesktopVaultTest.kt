@@ -3,6 +3,7 @@ package com.pdh.cardvault.desktop.data
 import com.pdh.cardvault.desktop.model.CardCoverStyle
 import com.pdh.cardvault.desktop.model.DesktopCard
 import com.pdh.cardvault.desktop.model.DesktopAddress
+import com.pdh.cardvault.desktop.model.DesktopFolderKind
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.nio.charset.StandardCharsets
@@ -18,6 +19,16 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class EncryptedDesktopVaultTest {
+    @Test
+    fun `opening an empty vault verifies and persists the protected local key`() {
+        val directory = Files.createTempDirectory("cardvault-empty-key")
+        val vault = EncryptedDesktopVault(directory, XorTestProtector())
+
+        assertTrue(vault.load().cards.isEmpty())
+        assertTrue(Files.isRegularFile(directory.resolve("vault.key")))
+        assertFalse(Files.exists(directory.resolve("vault.data")))
+    }
+
     private val fixedClock = Clock.fixed(Instant.parse("2026-07-17T00:00:00Z"), ZoneOffset.UTC)
 
     @Test
@@ -125,6 +136,30 @@ class EncryptedDesktopVaultTest {
     }
 
     @Test
+    fun `folder order including unfiled is draggable and survives restart`() {
+        val directory = Files.createTempDirectory("cardvault-desktop-folder-order")
+        val firstRepository = DesktopCardRepository(
+            EncryptedDesktopVault(directory, XorTestProtector()),
+            fixedClock,
+        )
+        val first = firstRepository.createFolder("分组甲", DesktopFolderKind.CARDS)
+        val second = firstRepository.createFolder("分组乙", DesktopFolderKind.CARDS)
+
+        assertEquals(listOf(null, first.id, second.id), firstRepository.folderOrder(DesktopFolderKind.CARDS))
+        assertTrue(firstRepository.reorderFolders(DesktopFolderKind.CARDS, listOf(second.id, null, first.id)))
+        assertEquals(listOf(second.id, null, first.id), firstRepository.folderOrder(DesktopFolderKind.CARDS))
+        assertEquals(listOf(second.id, first.id), firstRepository.folders(DesktopFolderKind.CARDS).map { it.id })
+        firstRepository.close()
+
+        val reopened = DesktopCardRepository(
+            EncryptedDesktopVault(directory, XorTestProtector()),
+            fixedClock,
+        )
+        assertEquals(listOf(second.id, null, first.id), reopened.folderOrder(DesktopFolderKind.CARDS))
+        reopened.close()
+    }
+
+    @Test
     fun `Windows DPAPI protects and restores a local key`() {
         if (!System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) return
         val protector = WindowsDpapiKeyProtector()
@@ -176,6 +211,51 @@ class EncryptedDesktopVaultTest {
         assertTrue(restored.syncState.addressTombstones.isEmpty())
     }
 
+    @Test
+    fun `version three desktop snapshot preserves cards and addresses with empty folders`() {
+        val card = syntheticCard()
+        val address = syntheticAddress()
+        val state = DesktopSyncState.create().let { initial ->
+            initial.copy(
+                recordVectors = mapOf(card.id to VersionVector(mapOf(initial.deviceId to 1L))),
+                addressRecordVectors = mapOf(address.id to VersionVector(mapOf(initial.deviceId to 1L))),
+            )
+        }
+
+        val restored = DesktopVaultCodec.decode(legacyVersionThreeSnapshot(card, address, state))
+
+        assertEquals(listOf(card), restored.cards)
+        assertEquals(listOf(address), restored.addresses)
+        assertTrue(restored.folders.isEmpty())
+        assertTrue(restored.syncState.folderRecordVectors.isEmpty())
+        assertTrue(restored.syncState.folderTombstones.isEmpty())
+    }
+
+    @Test
+    fun `version four desktop snapshot upgrades without losing existing data`() {
+        val card = syntheticCard()
+        val address = syntheticAddress()
+        val state = DesktopSyncState.create().let { initial ->
+            initial.copy(
+                recordVectors = mapOf(card.id to VersionVector(mapOf(initial.deviceId to 1L))),
+                addressRecordVectors = mapOf(address.id to VersionVector(mapOf(initial.deviceId to 1L))),
+            )
+        }
+        val versionFive = DesktopVaultCodec.encode(
+            DesktopVaultSnapshot(listOf(card), 9L, state, listOf(address)),
+        )
+        val versionOffset = 1 + "CardVault/DesktopSnapshot".toByteArray(StandardCharsets.US_ASCII).size
+        versionFive[versionOffset + 3] = 4
+        val versionFour = versionFive.copyOf(versionFive.size - 10)
+
+        val restored = DesktopVaultCodec.decode(versionFour)
+
+        assertEquals(listOf(card), restored.cards)
+        assertEquals(listOf(address), restored.addresses)
+        assertEquals(listOf(null), restored.cardFolderOrder)
+        assertEquals(listOf(null), restored.addressFolderOrder)
+    }
+
     private fun legacyVersionTwoSnapshot(
         card: DesktopCard,
         state: DesktopSyncState,
@@ -214,6 +294,72 @@ class EncryptedDesktopVaultTest {
             data.writeLong(card.updatedAtEpochMillis)
         }
         buffer.toByteArray()
+    }
+
+    private fun legacyVersionThreeSnapshot(
+        card: DesktopCard,
+        address: DesktopAddress,
+        state: DesktopSyncState,
+    ): ByteArray = ByteArrayOutputStream().use { buffer ->
+        DataOutputStream(buffer).use { data ->
+            val magic = "CardVault/DesktopSnapshot".toByteArray(StandardCharsets.US_ASCII)
+            data.writeByte(magic.size)
+            data.write(magic)
+            data.writeInt(3)
+            data.writeLong(8L)
+            data.writeLegacyString(state.vaultId)
+            data.writeLegacyString(state.deviceId)
+            data.writeLong(state.keyEpoch)
+            data.writeBoolean(false)
+            data.writeLong(state.exportSequence)
+            data.writeInt(1)
+            data.writeLegacyString(card.id)
+            data.writeLegacyVector(state.recordVectors.getValue(card.id))
+            data.writeInt(0)
+            data.writeLegacyVector(state.orderVector)
+            data.writeInt(0)
+            data.writeInt(0)
+            data.writeInt(1)
+            data.writeLegacyString(address.id)
+            data.writeLegacyVector(state.addressRecordVectors.getValue(address.id))
+            data.writeInt(0)
+            data.writeLegacyVector(state.addressOrderVector)
+            data.writeInt(1)
+            data.writeLegacyCard(card)
+            data.writeInt(1)
+            data.writeLegacyAddress(address)
+        }
+        buffer.toByteArray()
+    }
+
+    private fun DataOutputStream.writeLegacyCard(card: DesktopCard) {
+        writeLegacyString(card.id)
+        writeLegacyString(card.nickname)
+        writeLegacyString(card.issuerName)
+        writeLegacyString(card.cardNumber)
+        writeInt(card.expiryMonth)
+        writeInt(card.expiryYear)
+        writeBoolean(card.cvv != null)
+        card.cvv?.let { writeLegacyString(it) }
+        writeLegacyString(card.notes)
+        writeLegacyString(card.cardTemplateId)
+        writeInt(card.sortOrder)
+        writeLong(card.createdAtEpochMillis)
+        writeLong(card.updatedAtEpochMillis)
+    }
+
+    private fun DataOutputStream.writeLegacyAddress(address: DesktopAddress) {
+        writeLegacyString(address.id)
+        writeLegacyString(address.nickname)
+        writeLegacyString(address.detailedAddress)
+        writeLegacyString(address.city)
+        writeLegacyString(address.other)
+        writeLegacyString(address.postalCode)
+        writeLegacyString(address.country)
+        writeLegacyString(address.cardTemplateId)
+        writeInt(address.sortOrder)
+        writeLong(address.createdAtEpochMillis)
+        writeLong(address.updatedAtEpochMillis)
     }
 
     private fun DataOutputStream.writeLegacyString(value: String) {

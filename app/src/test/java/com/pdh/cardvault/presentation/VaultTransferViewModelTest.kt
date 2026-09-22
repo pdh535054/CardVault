@@ -48,21 +48,54 @@ class VaultTransferViewModelTest {
     }
 
     @Test
-    fun pairedExportUsesSyncWhileConnectNewDeviceAlwaysCreatesPairingFile() {
+    fun primaryManualExportAlwaysCreatesPairingFileEvenWhenAlreadyPaired() {
         val fixture = fixture(paired = true)
 
         fixture.viewModel.requestExport()
         authorize(fixture.viewModel, AuthenticationAction.ExportVault)
-        assertEquals(1, fixture.operations.syncExportCount)
-        assertNull(fixture.viewModel.uiState.value.pairingCode)
+        assertEquals(0, fixture.operations.syncExportCount)
+        assertEquals(1, fixture.operations.pairingExportCount)
+        assertEquals(FakeOperations.PAIRING_CODE, fixture.viewModel.uiState.value.pairingCode)
 
-        fixture.viewModel.requestNewDevicePairing()
+        fixture.viewModel.requestExport()
         authorize(fixture.viewModel, AuthenticationAction.ExportVault)
 
-        assertEquals(1, fixture.operations.syncExportCount)
-        assertEquals(1, fixture.operations.pairingExportCount)
+        assertEquals(0, fixture.operations.syncExportCount)
+        assertEquals(2, fixture.operations.pairingExportCount)
         assertEquals("CardVault-pair-1.cvpair", fixture.viewModel.uiState.value.preparedFileName)
         assertEquals(FakeOperations.PAIRING_CODE, fixture.viewModel.uiState.value.pairingCode)
+    }
+
+    @Test
+    fun pairingCodeCanBeCopiedWithoutExposingItInFeedback() {
+        val fixture = fixture(paired = false)
+        fixture.viewModel.requestExport()
+        authorize(fixture.viewModel, AuthenticationAction.ExportVault)
+        var copiedValue: String? = null
+
+        fixture.viewModel.copyPreparedPairingCode { value ->
+            copiedValue = value
+            true
+        }
+
+        assertEquals(FakeOperations.PAIRING_CODE, copiedValue)
+        val feedback = requireNotNull(fixture.viewModel.uiState.value.message)
+        assertEquals(VaultTransferMessageKind.Success, feedback.kind)
+        assertFalse(feedback.text.contains(FakeOperations.PAIRING_CODE))
+    }
+
+    @Test
+    fun pairingCodeCopyFailureUsesSafeFeedback() {
+        val fixture = fixture(paired = false)
+        fixture.viewModel.requestExport()
+        authorize(fixture.viewModel, AuthenticationAction.ExportVault)
+
+        fixture.viewModel.copyPreparedPairingCode { false }
+
+        assertEquals(
+            "无法复制配对码，请稍后重试",
+            fixture.viewModel.uiState.value.message?.text,
+        )
     }
 
     @Test
@@ -104,6 +137,19 @@ class VaultTransferViewModelTest {
         assertTrue(fixture.viewModel.uiState.value.pairingCodeInput.isEmpty())
         assertEquals(1L, fixture.viewModel.uiState.value.importedSnapshotRevision)
         assertTrue(fixture.files.readBytes.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun pairingCodeInputPreservesRequiredCvp1Prefix() {
+        val fixture = fixture(readBytes = encodedPairingFile())
+        fixture.viewModel.onImportUriSelected(TEST_URI)
+
+        fixture.viewModel.updatePairingCode(FakeOperations.PAIRING_CODE)
+
+        assertEquals(
+            FakeOperations.PAIRING_CODE,
+            fixture.viewModel.uiState.value.pairingCodeInput,
+        )
     }
 
     @Test
@@ -244,7 +290,7 @@ class VaultTransferViewModelTest {
 
         assertNull(fixture.viewModel.preparedShareIntent())
         assertEquals("无法打开系统分享，请稍后重试", fixture.viewModel.uiState.value.message?.text)
-        assertEquals("CardVault-sync-1.cvsync", fixture.viewModel.uiState.value.preparedFileName)
+        assertEquals("CardVault-pair-1.cvpair", fixture.viewModel.uiState.value.preparedFileName)
     }
 
     private fun authorize(viewModel: VaultTransferViewModel, action: AuthenticationAction) {

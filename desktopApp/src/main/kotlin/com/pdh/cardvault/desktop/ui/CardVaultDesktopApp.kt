@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -56,8 +57,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -200,6 +205,8 @@ private fun NavItem(symbol: String, label: String, selected: Boolean, onClick: (
 private fun WalletScreen(controller: DesktopAppController, modifier: Modifier) {
     var deleteConfirmation by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val folderBounds = remember { mutableMapOf<String?, Rect>() }
+    val visibleCards = controller.cards.filter { it.folderId == controller.selectedCardFolderId }
     Row(modifier.fillMaxSize().padding(32.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(470.dp).fillMaxHeight()) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -217,14 +224,37 @@ private fun WalletScreen(controller: DesktopAppController, modifier: Modifier) {
                 }
             }
             Spacer(Modifier.height(28.dp))
-            if (controller.cards.isEmpty()) {
+            DesktopFolderBar(
+                folders = controller.cardFolders,
+                folderOrder = controller.cardFolderOrder,
+                selectedId = controller.selectedCardFolderId,
+                unfiledCount = controller.cards.count { it.folderId == null },
+                itemCount = { folderId -> controller.cards.count { it.folderId == folderId } },
+                onSelect = controller::selectCardFolder,
+                onCreate = { controller.createFolder(it, com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS) },
+                onRename = controller::renameFolder,
+                onDelete = controller::deleteFolder,
+                onReorder = { controller.reorderFolders(com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS, it) },
+                onBounds = { id, bounds -> folderBounds[id] = bounds },
+            )
+            Spacer(Modifier.height(16.dp))
+            if (visibleCards.isEmpty()) {
                 EmptyWallet(controller)
             } else {
                 WalletStack(
-                    cards = controller.cards,
+                    cards = visibleCards,
                     selectedId = controller.selectedId,
                     onSelect = controller::selectCard,
-                    onMove = controller::moveCard,
+                    onMove = { id, target ->
+                        visibleCards.getOrNull(target)?.id?.let { targetId ->
+                            controller.moveCard(id, controller.cards.indexOfFirst { it.id == targetId })
+                        }
+                    },
+                    onDrop = { cardId, position ->
+                        val target = folderBounds.entries.firstOrNull { (_, bounds) -> bounds.contains(position) }
+                        val current = controller.cards.firstOrNull { it.id == cardId }?.folderId
+                        target != null && target.key != current && controller.moveCardToFolder(cardId, target.key)
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -279,37 +309,49 @@ private fun WalletStack(
     selectedId: String?,
     onSelect: (String) -> Unit,
     onMove: (String, Int) -> Unit,
+    onDrop: (String, Offset) -> Boolean,
     modifier: Modifier,
 ) {
-    Box(modifier) {
+    DesktopStackViewport(itemCount = cards.size, modifier = modifier) {
         cards.forEachIndexed { index, card ->
             val selected = card.id == selectedId
             val y by animateDpAsState(
-                targetValue = (index * 74).dp,
+                targetValue = (index * DESKTOP_STACK_STEP_DP).dp,
                 animationSpec = spring(stiffness = Spring.StiffnessLow, dampingRatio = 0.82f),
             )
             val scale by animateFloatAsState(if (selected) 1.018f else 1f)
             var dragY by remember(card.id) { mutableFloatStateOf(0f) }
+            var dragX by remember(card.id) { mutableFloatStateOf(0f) }
+            var origin by remember(card.id) { mutableStateOf(Offset.Zero) }
+            var pointer by remember(card.id) { mutableStateOf(Offset.Unspecified) }
             CardFace(
                 card = card,
                 compact = true,
                 modifier = Modifier.fillMaxWidth()
-                    .offset { IntOffset(0, dragY.roundToInt()) }
+                    .offset { IntOffset(dragX.roundToInt(), dragY.roundToInt()) }
                     .offset(y = y)
                     .zIndex(index.toFloat() + if (dragY != 0f) 100f else 0f)
                     .graphicsLayer { scaleX = scale; scaleY = scale }
                     .shadow(if (selected) 22.dp else 12.dp, RoundedCornerShape(28.dp))
+                    .onGloballyPositioned { if (dragX == 0f && dragY == 0f) origin = it.boundsInRoot().topLeft }
                     .clickable { onSelect(card.id) }
                     .pointerInput(card.id, cards.size) {
                         detectDragGesturesAfterLongPress(
-                            onDragStart = { onSelect(card.id) },
+                            onDragStart = { local -> onSelect(card.id); pointer = origin + local },
                             onDragEnd = {
-                                val target = (index + dragY / 74.dp.toPx()).roundToInt().coerceIn(cards.indices)
+                                val target = (
+                                    index + dragY / DESKTOP_STACK_STEP_DP.dp.toPx()
+                                ).roundToInt().coerceIn(cards.indices)
+                                val dropped = onDrop(card.id, pointer)
+                                dragX = 0f
                                 dragY = 0f
-                                onMove(card.id, target)
+                                pointer = Offset.Unspecified
+                                if (!dropped) onMove(card.id, target)
                             },
-                            onDragCancel = { dragY = 0f },
-                            onDrag = { change, amount -> change.consume(); dragY += amount.y },
+                            onDragCancel = { dragX = 0f; dragY = 0f; pointer = Offset.Unspecified },
+                            onDrag = { change, amount ->
+                                change.consume(); dragX += amount.x; dragY += amount.y; pointer += amount
+                            },
                         )
                     },
             )
@@ -432,7 +474,7 @@ private fun TransferScreen(controller: DesktopAppController, modifier: Modifier)
         Spacer(Modifier.height(30.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
-            TransferPanel("导出到手机", "选择一个文件夹，CardVault 会把加密同步文件写入该位置。", Modifier.weight(1f)) {
+            TransferPanel("导出到手机", "每次生成可直接导入的加密传输文件与一次性配对码。", Modifier.weight(1f)) {
                 Text(
                     controller.exportDirectory ?: "尚未选择导出位置",
                     color = Color.White.copy(alpha = if (controller.exportDirectory == null) 0.38f else 0.68f),
@@ -446,16 +488,10 @@ private fun TransferScreen(controller: DesktopAppController, modifier: Modifier)
                 }) { Text("选择位置") }
                 Spacer(Modifier.height(22.dp))
                 Button(
-                    onClick = { scope.launch { controller.export(newPairing = false) } },
-                    enabled = controller.syncGateway.isReady && controller.exportDirectory != null && controller.authenticatingAction == null,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("导出同步文件") }
-                Spacer(Modifier.height(10.dp))
-                TextButton(
                     onClick = { scope.launch { controller.export(newPairing = true) } },
                     enabled = controller.syncGateway.isReady && controller.exportDirectory != null && controller.authenticatingAction == null,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("为新设备创建配对文件") }
+                ) { Text("导出传输文件") }
             }
 
             TransferPanel("从手机导入", "打开手机分享来的 .cvsync 或 .cvpair 文件。导入会先验证完整性。", Modifier.weight(1f)) {
@@ -466,21 +502,79 @@ private fun TransferScreen(controller: DesktopAppController, modifier: Modifier)
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = {
+                        controller.pastePairingCodeFromClipboard()?.let { pairingCodeInput = it }
+                    },
+                    enabled = !controller.transferBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("从剪贴板粘贴配对码") }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = {
+                        chooseImportFile()?.let(controller::selectImportFile)
+                    },
+                    enabled = controller.syncGateway.isReady && !controller.transferBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("选择文件") }
+                controller.selectedImportPath?.let { path ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "已选择：${path.fileName}",
+                        color = Color.White.copy(alpha = 0.72f),
+                        fontSize = 12.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        if (controller.selectedImportKind == com.pdh.cardvault.sync.SyncFileKind.PAIRING) {
+                            "类型：首次配对文件（需要配对码）"
+                        } else {
+                            "类型：日常同步文件"
+                        },
+                        color = Color.White.copy(alpha = 0.42f),
+                        fontSize = 11.sp,
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
                 Button(
                     onClick = {
-                        chooseImportFile()?.let { path ->
-                            scope.launch {
-                                if (controller.import(path, pairingCodeInput)) pairingCodeInput = ""
-                            }
+                        scope.launch {
+                            if (controller.importSelected(pairingCodeInput)) pairingCodeInput = ""
                         }
                     },
-                    enabled = controller.syncGateway.isReady && controller.authenticatingAction == null,
+                    enabled = controller.syncGateway.isReady &&
+                        controller.selectedImportPath != null &&
+                        !controller.transferBusy &&
+                        controller.authenticatingAction == null,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("选择并导入文件") }
+                ) {
+                    if (controller.transferBusy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = Color(0xFF111318),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("正在导入")
+                    } else {
+                        Text("开始导入")
+                    }
+                }
                 Spacer(Modifier.height(12.dp))
                 Text("配对码和配对文件请分开发送。", color = Color(0xFFFFD49B), fontSize = 11.sp)
             }
+        }
+
+        controller.transferFeedback?.let { feedback ->
+            Spacer(Modifier.height(18.dp))
+            Text(
+                feedback.text,
+                color = if (feedback.isError) Color(0xFFFF9B94) else Color(0xFFBBD0FF),
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                    .background(Color.White.copy(alpha = 0.055f)).padding(14.dp),
+            )
         }
 
         controller.pairingCode?.let { code ->
@@ -492,6 +586,11 @@ private fun TransferScreen(controller: DesktopAppController, modifier: Modifier)
                 Text("新设备配对码", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
                 Spacer(Modifier.height(6.dp))
                 Text(code, color = Accent, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.5.sp)
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = controller::copyCurrentPairingCode,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("复制配对码") }
                 Spacer(Modifier.height(8.dp))
                 Text("不要把此配对码与 .cvpair 文件放在同一条微信消息中。", color = Color.White.copy(alpha = 0.52f), fontSize = 11.sp)
             }
@@ -573,7 +672,7 @@ private fun SettingsScreen(controller: DesktopAppController, modifier: Modifier)
         Spacer(Modifier.height(12.dp))
         SettingsCard("数据交换", "加密文件", "仅在你主动同步时生成或读取密文文件")
         Spacer(Modifier.height(30.dp))
-        Text("CardVault 1.4.0  ·  Windows", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp)
+        Text("CardVault 1.5.6  ·  Windows", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp)
         Text(
             "本地数据目录：${EncryptedDesktopVault.defaultDirectory()}",
             color = Color.White.copy(alpha = 0.22f),

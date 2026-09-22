@@ -15,6 +15,7 @@ enum class MergeConflictType {
 enum class SyncCollectionKind {
     CARDS,
     ADDRESSES,
+    FOLDERS,
 }
 
 data class MergeConflict(
@@ -41,8 +42,11 @@ object SnapshotMerger {
         resolverDeviceId: String,
     ): MergeResult {
         ProtocolValidation.requireUuid(resolverDeviceId)
+        val normalizedIncoming = if (incoming.folders == null) {
+            incoming.inheritFolderMembershipFrom(local)
+        } else incoming
         val localById = local.records.associateBy(SyncRecord::recordId)
-        val incomingById = incoming.records.associateBy(SyncRecord::recordId)
+        val incomingById = normalizedIncoming.records.associateBy(SyncRecord::recordId)
         val occupiedIds = (localById.keys + incomingById.keys).toMutableSet()
         val merged = linkedMapOf<String, SyncRecord>()
         val conflicts = mutableListOf<MergeConflict>()
@@ -84,11 +88,11 @@ object SnapshotMerger {
         }
 
         val orderChoice = when {
-            local.records.isEmpty() && incoming.records.isNotEmpty() ->
-                OrderChoice(incoming.order.recordIds, hadConflict = false)
-            incoming.records.isEmpty() && local.records.isNotEmpty() ->
+            local.records.isEmpty() && normalizedIncoming.records.isNotEmpty() ->
+                OrderChoice(normalizedIncoming.order.recordIds, hadConflict = false)
+            normalizedIncoming.records.isEmpty() && local.records.isNotEmpty() ->
                 OrderChoice(local.order.recordIds, hadConflict = false)
-            else -> chooseOrder(local.order, incoming.order)
+            else -> chooseOrder(local.order, normalizedIncoming.order)
         }
         if (orderChoice.hadConflict) conflicts += MergeConflict(MergeConflictType.ORDER)
         val orderedIds = linkedSetOf<String>()
@@ -99,28 +103,89 @@ object SnapshotMerger {
             }
         }
         activeIds.sorted().forEach(orderedIds::add)
-        val orderVersion = local.order.version.merge(incoming.order.version).let { mergedVersion ->
+        val orderVersion = local.order.version.merge(normalizedIncoming.order.version).let { mergedVersion ->
             if (orderChoice.hadConflict) resolveVersion(mergedVersion, resolverDeviceId) else mergedVersion
         }
         val mergedOrder = SyncOrder(
             version = orderVersion,
-            updatedAtEpochMillis = maxOf(local.order.updatedAtEpochMillis, incoming.order.updatedAtEpochMillis),
+            updatedAtEpochMillis = maxOf(local.order.updatedAtEpochMillis, normalizedIncoming.order.updatedAtEpochMillis),
             recordIds = orderedIds.toList(),
         )
         val addressMerge = when {
-            local.addresses == null -> AddressMergeResult(incoming.addresses, emptyList())
-            incoming.addresses == null -> AddressMergeResult(local.addresses, emptyList())
-            else -> AddressSnapshotMerger.merge(local.addresses, incoming.addresses, resolverDeviceId)
+            local.addresses == null -> AddressMergeResult(normalizedIncoming.addresses, emptyList())
+            normalizedIncoming.addresses == null -> AddressMergeResult(local.addresses, emptyList())
+            else -> AddressSnapshotMerger.merge(local.addresses, normalizedIncoming.addresses, resolverDeviceId)
         }
         conflicts += addressMerge.conflicts
+        val folderMerge = when {
+            local.folders == null -> FolderMergeResult(normalizedIncoming.folders, emptyList())
+            normalizedIncoming.folders == null -> FolderMergeResult(local.folders, emptyList())
+            else -> FolderSnapshotMerger.merge(local.folders, normalizedIncoming.folders, resolverDeviceId)
+        }
+        conflicts += folderMerge.conflicts
+        val activeFolderKinds = folderMerge.snapshot?.records.orEmpty().mapNotNull { record ->
+            val value = record.value as? FolderSyncRecordValue.Active ?: return@mapNotNull null
+            record.recordId to value.payload.collection
+        }.toMap()
+        val sanitizedCards = merged.values.map { record ->
+            val value = record.value as? SyncRecordValue.Active ?: return@map record
+            val folderId = value.payload.folderId
+            if (folderId == null || activeFolderKinds[folderId] == FolderCollectionKind.CARDS) record else {
+                record.copy(value = value.copy(payload = value.payload.copy(folderId = null)))
+            }
+        }
+        val sanitizedAddresses = addressMerge.snapshot?.copy(
+            records = addressMerge.snapshot.records.map { record ->
+                val value = record.value as? AddressSyncRecordValue.Active ?: return@map record
+                val folderId = value.payload.folderId
+                if (folderId == null || activeFolderKinds[folderId] == FolderCollectionKind.ADDRESSES) record else {
+                    record.copy(value = value.copy(payload = value.payload.copy(folderId = null)))
+                }
+            },
+        )
         return MergeResult(
             snapshot = SyncSnapshot(
-                records = merged.values.sortedBy(SyncRecord::recordId),
+                records = sanitizedCards.sortedBy(SyncRecord::recordId),
                 order = mergedOrder,
-                addresses = addressMerge.snapshot,
+                addresses = sanitizedAddresses,
+                folders = folderMerge.snapshot,
             ),
             conflicts = conflicts.toList(),
         )
+    }
+
+    private fun SyncSnapshot.inheritFolderMembershipFrom(local: SyncSnapshot): SyncSnapshot {
+        val localCards = local.records.associateBy(SyncRecord::recordId)
+        val cardsWithMembership = records.map { incomingRecord ->
+            val incomingValue = incomingRecord.value as? SyncRecordValue.Active ?: return@map incomingRecord
+            val localValue = (localCards[incomingRecord.recordId]?.value as? SyncRecordValue.Active)
+                ?: return@map incomingRecord
+            incomingRecord.copy(
+                value = incomingValue.copy(
+                    payload = incomingValue.payload.copy(
+                        schemaVersion = maxOf(incomingValue.payload.schemaVersion, localValue.payload.schemaVersion),
+                        folderId = localValue.payload.folderId,
+                    ),
+                ),
+            )
+        }
+        val localAddresses = local.addresses?.records.orEmpty().associateBy(AddressSyncRecord::recordId)
+        val addressesWithMembership = addresses?.copy(
+            records = addresses.records.map { incomingRecord ->
+                val incomingValue = incomingRecord.value as? AddressSyncRecordValue.Active ?: return@map incomingRecord
+                val localValue = (localAddresses[incomingRecord.recordId]?.value as? AddressSyncRecordValue.Active)
+                    ?: return@map incomingRecord
+                incomingRecord.copy(
+                    value = incomingValue.copy(
+                        payload = incomingValue.payload.copy(
+                            schemaVersion = maxOf(incomingValue.payload.schemaVersion, localValue.payload.schemaVersion),
+                            folderId = localValue.payload.folderId,
+                        ),
+                    ),
+                )
+            },
+        )
+        return copy(records = cardsWithMembership, addresses = addressesWithMembership)
     }
 
     private fun mergeRecord(
@@ -249,6 +314,7 @@ object SnapshotMerger {
                     addText(cvv.orEmpty())
                     addText(cardTemplateId)
                     addText(notes)
+                    addText(folderId.orEmpty())
                 }
             }
             is SyncRecordValue.Tombstone -> {

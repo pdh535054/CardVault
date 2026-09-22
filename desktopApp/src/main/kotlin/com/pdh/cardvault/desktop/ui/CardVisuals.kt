@@ -48,6 +48,7 @@ import com.pdh.cardvault.desktop.model.CardCoverStyle
 import com.pdh.cardvault.desktop.model.CardPattern
 import com.pdh.cardvault.desktop.model.DesktopCard
 import com.pdh.cardvault.desktop.model.DesktopAddress
+import com.pdh.cardvault.desktop.model.DesktopAddressCopyPart
 import com.pdh.cardvault.desktop.model.NicknameTypography
 import kotlin.math.cos
 import kotlin.math.min
@@ -143,56 +144,91 @@ fun AddressFace(
 @Composable
 fun AddressBack(
     address: DesktopAddress,
-    onCopy: () -> Unit,
+    onCopy: (DesktopAddressCopyPart) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     CardSurface(style = address.style, modifier = modifier) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 23.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(
-                    text = address.country,
-                    color = Color(address.style.nicknameArgb).copy(alpha = 0.62f),
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = "复制完整地址",
-                    color = Color(address.style.nicknameArgb),
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
-                    modifier = Modifier.clip(CircleShape).clickable(onClick = onCopy)
-                        .padding(horizontal = 8.dp, vertical = 5.dp),
-                )
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
+        val textColor = Color(address.style.nicknameArgb)
+        Box(Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 23.dp)) {
+            Text(
+                text = "复制完整地址",
+                color = textColor,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.TopEnd).clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.14f))
+                    .clickable { onCopy(DesktopAddressCopyPart.Complete) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+            Column(
+                modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                DesktopAddressCopyLine(
                     text = address.detailedAddress,
-                    color = Color(address.style.nicknameArgb),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
+                    textColor = textColor,
+                    emphasized = true,
                     maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
+                    onClick = { onCopy(DesktopAddressCopyPart.DetailedAddress) },
                 )
                 address.other.takeIf(String::isNotBlank)?.let { other ->
-                    Text(
+                    DesktopAddressCopyLine(
                         text = other,
-                        color = Color(address.style.nicknameArgb).copy(alpha = 0.72f),
-                        fontSize = 11.sp,
+                        textColor = textColor,
                         maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        onClick = { onCopy(DesktopAddressCopyPart.Other) },
+                    )
+                }
+                DesktopAddressCopyLine(
+                    text = address.city,
+                    textColor = textColor,
+                    onClick = { onCopy(DesktopAddressCopyPart.City) },
+                )
+                DesktopAddressCopyLine(
+                    text = address.postalCode,
+                    textColor = textColor,
+                    onClick = { onCopy(DesktopAddressCopyPart.PostalCode) },
+                )
+                address.country.takeIf(String::isNotBlank)?.let { country ->
+                    DesktopAddressCopyLine(
+                        text = country,
+                        textColor = textColor,
+                        onClick = { onCopy(DesktopAddressCopyPart.Country) },
                     )
                 }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                BackValue("城市", address.city, address.style.nicknameArgb)
-                BackValue("邮编", address.postalCode, address.style.nicknameArgb)
-            }
         }
+    }
+}
+
+@Composable
+private fun DesktopAddressCopyLine(
+    text: String,
+    textColor: Color,
+    onClick: () -> Unit,
+    emphasized: Boolean = false,
+    maxLines: Int = 1,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(9.dp)).clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.weight(1f),
+            color = textColor,
+            fontSize = if (emphasized) 16.sp else 13.sp,
+            fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = "⧉",
+            color = textColor.copy(alpha = 0.56f),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(start = 10.dp),
+        )
     }
 }
 
@@ -200,7 +236,7 @@ fun AddressBack(
 fun FlippableAddress(
     address: DesktopAddress,
     flipped: Boolean,
-    onCopy: () -> Unit,
+    onCopy: (DesktopAddressCopyPart) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val rotation by animateFloatAsState(

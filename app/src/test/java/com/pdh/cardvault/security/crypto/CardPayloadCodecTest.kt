@@ -62,7 +62,7 @@ class CardPayloadCodecTest {
         val encoded = codec.encode(syntheticCardPayload())
 
         assertThrows(UnsupportedCryptoVersionException::class.java) {
-            codec.decode(encoded, expectedSchemaVersion = 2)
+            codec.decode(encoded, expectedSchemaVersion = codec.currentSchemaVersion + 1)
         }
     }
 
@@ -72,7 +72,7 @@ class CardPayloadCodecTest {
         val schemaOffset = Int.SIZE_BYTES + "CardVault/Payload".toByteArray().size
         ByteBuffer.wrap(encoded)
             .order(ByteOrder.BIG_ENDIAN)
-            .putInt(schemaOffset, 2)
+            .putInt(schemaOffset, codec.currentSchemaVersion + 1)
 
         assertThrows(UnsupportedCryptoVersionException::class.java) {
             codec.decode(encoded, expectedSchemaVersion = codec.currentSchemaVersion)

@@ -6,6 +6,7 @@ import java.nio.ByteOrder
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import java.util.UUID
 
 data class CardPayload(
     val nickname: String,
@@ -17,6 +18,7 @@ data class CardPayload(
     val cvv: String?,
     val cardTemplateId: String,
     val notes: String,
+    val folderId: String? = null,
 ) {
     init {
         require(nickname == nickname.trim() && nickname.codePointLength() in 1..50) {
@@ -46,6 +48,9 @@ data class CardPayload(
         require(notes.codePointLength() <= 1000) {
             "The card payload is invalid."
         }
+        require(folderId == null || runCatching { UUID.fromString(folderId).toString() == folderId }.getOrDefault(false)) {
+            "The card payload is invalid."
+        }
     }
 
     override fun toString(): String = "CardPayload(sensitiveFields=redacted)"
@@ -61,6 +66,7 @@ class CardPayloadCodec {
         val cvv = payload.cvv?.encodedUtf8()
         val templateId = payload.cardTemplateId.encodedUtf8()
         val notes = payload.notes.encodedUtf8()
+        val folderId = payload.folderId?.encodedUtf8()
         val sensitiveBuffers = listOfNotNull(
             nickname,
             issuer,
@@ -68,6 +74,7 @@ class CardPayloadCodec {
             cvv,
             templateId,
             notes,
+            folderId,
         )
 
         return try {
@@ -86,7 +93,9 @@ class CardPayloadCodec {
                     Byte.SIZE_BYTES +
                     optionalCvvBytes +
                     encodedStringSize(templateId) +
-                    encodedStringSize(notes)
+                    encodedStringSize(notes) +
+                    Byte.SIZE_BYTES +
+                    (folderId?.let(::encodedStringSize) ?: 0)
             require(totalSize <= MAX_PAYLOAD_BYTES) { "The card payload is invalid." }
 
             ByteBuffer.allocate(totalSize)
@@ -105,6 +114,8 @@ class CardPayloadCodec {
                 }
                 .putEncodedString(templateId)
                 .putEncodedString(notes)
+                .put(if (folderId == null) 0.toByte() else 1.toByte())
+                .apply { if (folderId != null) putEncodedString(folderId) }
                 .array()
         } finally {
             sensitiveBuffers.forEach { bytes -> bytes.fill(0) }
@@ -112,7 +123,7 @@ class CardPayloadCodec {
     }
 
     fun decode(encodedPayload: ByteArray, expectedSchemaVersion: Int): CardPayload {
-        if (expectedSchemaVersion != CURRENT_SCHEMA_VERSION) {
+        if (!isSupportedSchemaVersion(expectedSchemaVersion)) {
             throw UnsupportedCryptoVersionException()
         }
         if (encodedPayload.size !in MIN_PAYLOAD_BYTES..MAX_PAYLOAD_BYTES) {
@@ -142,6 +153,9 @@ class CardPayloadCodec {
             val cvv = if (saveCvv) buffer.readString(MAX_CVV_BYTES) else null
             val cardTemplateId = buffer.readString(MAX_TEMPLATE_ID_BYTES)
             val notes = buffer.readString(MAX_NOTES_BYTES)
+            val folderId = if (expectedSchemaVersion >= FOLDER_SCHEMA_VERSION) {
+                if (buffer.readBoolean()) buffer.readString(MAX_FOLDER_ID_BYTES) else null
+            } else null
             if (buffer.hasRemaining()) throw InvalidEncryptedPayloadException()
 
             CardPayload(
@@ -154,6 +168,7 @@ class CardPayloadCodec {
                 cvv = cvv,
                 cardTemplateId = cardTemplateId,
                 notes = notes,
+                folderId = folderId,
             )
         } catch (exception: UnsupportedCryptoVersionException) {
             throw exception
@@ -167,6 +182,9 @@ class CardPayloadCodec {
             throw InvalidEncryptedPayloadException()
         }
     }
+
+    fun isSupportedSchemaVersion(version: Int): Boolean =
+        version in LEGACY_SCHEMA_VERSION..CURRENT_SCHEMA_VERSION
 
     private fun ByteBuffer.readString(maxBytes: Int): String {
         val bytes = readBytes(maxBytes)
@@ -196,7 +214,9 @@ class CardPayloadCodec {
     }
 
     private companion object {
-        const val CURRENT_SCHEMA_VERSION = 1
+        const val LEGACY_SCHEMA_VERSION = 1
+        const val FOLDER_SCHEMA_VERSION = 2
+        const val CURRENT_SCHEMA_VERSION = FOLDER_SCHEMA_VERSION
         const val MAX_PAYLOAD_BYTES = 8 * 1024
         const val MIN_PAYLOAD_BYTES = 40
         const val MAX_MAGIC_BYTES = 64
@@ -206,6 +226,7 @@ class CardPayloadCodec {
         const val MAX_CVV_BYTES = 4
         const val MAX_TEMPLATE_ID_BYTES = 400
         const val MAX_NOTES_BYTES = 4000
+        const val MAX_FOLDER_ID_BYTES = 36
         val MAGIC = "CardVault/Payload".toByteArray(StandardCharsets.UTF_8)
 
         fun encodedStringSize(bytes: ByteArray): Int = Int.SIZE_BYTES + bytes.size

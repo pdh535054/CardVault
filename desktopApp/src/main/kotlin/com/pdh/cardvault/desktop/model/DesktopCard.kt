@@ -17,6 +17,7 @@ data class DesktopCard(
     val sortOrder: Int,
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
+    val folderId: String? = null,
 ) {
     init {
         require(runCatching { UUID.fromString(id) }.isSuccess) { "银行卡记录无效。" }
@@ -38,6 +39,7 @@ data class DesktopCard(
         require(sortOrder >= 0 && createdAtEpochMillis >= 0 && updatedAtEpochMillis >= createdAtEpochMillis) {
             "银行卡记录无效。"
         }
+        require(folderId == null || runCatching { UUID.fromString(folderId) }.isSuccess) { "银行卡记录无效。" }
     }
 
     val lastFour: String get() = cardNumber.takeLast(4)

@@ -24,9 +24,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
@@ -55,6 +58,7 @@ fun CardWalletStack(
     onCardOpened: (UUID) -> Unit,
     onCardsReordered: (List<UUID>) -> Unit,
     modifier: Modifier = Modifier,
+    onCardDropped: ((UUID, Offset) -> Boolean)? = null,
 ) {
     if (cards.isEmpty()) return
 
@@ -62,6 +66,8 @@ fun CardWalletStack(
     var dragStartOrder by remember { mutableStateOf(cards) }
     var draggingCardId by remember { mutableStateOf<UUID?>(null) }
     var dragDistancePx by remember { mutableFloatStateOf(0f) }
+    var dragDistanceXPx by remember { mutableFloatStateOf(0f) }
+    var dragPointerInRoot by remember { mutableStateOf(Offset.Unspecified) }
     var dragStartIndex by remember { mutableIntStateOf(-1) }
     var dragTargetIndex by remember { mutableIntStateOf(-1) }
     val latestCards by rememberUpdatedState(cards)
@@ -97,6 +103,7 @@ fun CardWalletStack(
                 key(card.id) {
                     val isDragging = draggingCardId == card.id
                     var hasEntered by remember(card.id) { mutableStateOf(false) }
+                    var cardOriginInRoot by remember(card.id) { mutableStateOf(Offset.Zero) }
                     LaunchedEffect(card.id) { hasEntered = true }
                     val targetOffset = walletCardOffset(index = index, peek = CARD_PEEK.value).dp
                     val animatedOffset by animateDpAsState(
@@ -165,6 +172,7 @@ fun CardWalletStack(
                             .fillMaxWidth()
                             .zIndex(if (isDragging) draftCards.size + 1f else index.toFloat())
                             .graphicsLayer {
+                                translationX = if (isDragging) dragDistanceXPx else 0f
                                 translationY = if (isDragging) {
                                     targetOffset.toPx() + dragCompensationPx
                                 } else {
@@ -179,10 +187,13 @@ fun CardWalletStack(
                                 shape = cardShape
                                 clip = false
                             }
+                            .onGloballyPositioned { coordinates ->
+                                if (!isDragging) cardOriginInRoot = coordinates.boundsInRoot().topLeft
+                            }
                             .pointerInput(card.id, sortingInProgress) {
                                 if (sortingInProgress) return@pointerInput
                                 detectDragGesturesAfterLongPress(
-                                    onDragStart = {
+                                    onDragStart = { localOffset ->
                                         val start = latestDraftCards.indexOfFirst { it.id == card.id }
                                         if (start >= 0) {
                                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -190,17 +201,17 @@ fun CardWalletStack(
                                             dragStartIndex = start
                                             dragTargetIndex = start
                                             dragDistancePx = 0f
+                                            dragDistanceXPx = 0f
+                                            dragPointerInRoot = cardOriginInRoot + localOffset
                                             draggingCardId = card.id
                                         }
                                     },
                                     onDrag = { change, amount ->
                                         if (draggingCardId == card.id) {
                                             change.consume()
-                                            val maxUp = -dragStartIndex * peekPx
-                                            val maxDown =
-                                                (dragStartOrder.lastIndex - dragStartIndex) * peekPx
-                                            dragDistancePx = (dragDistancePx + amount.y)
-                                                .coerceIn(maxUp, maxDown)
+                                            dragDistanceXPx += amount.x
+                                            dragDistancePx += amount.y
+                                            dragPointerInRoot += amount
                                             val target = dragTargetIndex(
                                                 startIndex = dragStartIndex,
                                                 dragDistancePx = dragDistancePx,
@@ -222,15 +233,22 @@ fun CardWalletStack(
                                     },
                                     onDragEnd = {
                                         if (draggingCardId == card.id) {
-                                            onCardsReordered(draftCards.map(CardListItemUiModel::id))
+                                            val dropped = onCardDropped?.invoke(card.id, dragPointerInRoot) == true
+                                            if (!dropped) {
+                                                onCardsReordered(draftCards.map(CardListItemUiModel::id))
+                                            }
                                         }
                                         draggingCardId = null
                                         dragDistancePx = 0f
+                                        dragDistanceXPx = 0f
+                                        dragPointerInRoot = Offset.Unspecified
                                     },
                                     onDragCancel = {
                                         draftCards = latestCards
                                         draggingCardId = null
                                         dragDistancePx = 0f
+                                        dragDistanceXPx = 0f
+                                        dragPointerInRoot = Offset.Unspecified
                                     },
                                 )
                             }

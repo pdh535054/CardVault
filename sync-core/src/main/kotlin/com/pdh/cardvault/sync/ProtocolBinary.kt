@@ -35,7 +35,8 @@ object VersionVectorCodec {
 
 internal object PackagePayloadCodec {
     private const val LEGACY_PAYLOAD_VERSION = 1
-    private const val CURRENT_PAYLOAD_VERSION = 2
+    private const val ADDRESS_PAYLOAD_VERSION = 2
+    private const val CURRENT_PAYLOAD_VERSION = 3
     private val pairMagic = "CVPAIRP1".toByteArray(StandardCharsets.US_ASCII)
     private val syncMagic = "CVSYNCP1".toByteArray(StandardCharsets.US_ASCII)
 
@@ -127,8 +128,11 @@ internal object PackagePayloadCodec {
         }
     }
 
-    private fun SyncSnapshot.payloadVersion(): Int =
-        if (addresses == null) LEGACY_PAYLOAD_VERSION else CURRENT_PAYLOAD_VERSION
+    private fun SyncSnapshot.payloadVersion(): Int = when {
+        folders != null -> CURRENT_PAYLOAD_VERSION
+        addresses != null -> ADDRESS_PAYLOAD_VERSION
+        else -> LEGACY_PAYLOAD_VERSION
+    }
 
     private fun BinaryReader.readPayloadVersion(): Int = readInt().also { version ->
         if (version !in LEGACY_PAYLOAD_VERSION..CURRENT_PAYLOAD_VERSION) {
@@ -137,17 +141,25 @@ internal object PackagePayloadCodec {
     }
 
     private fun BinaryWriter.writeVersionedSnapshot(snapshot: SyncSnapshot) {
-        writeSnapshot(snapshot)
-        snapshot.addresses?.let(::writeAddressSnapshot)
+        val payloadVersion = snapshot.payloadVersion()
+        writeSnapshot(snapshot, includeFolderMembership = payloadVersion >= CURRENT_PAYLOAD_VERSION)
+        snapshot.addresses?.let { addresses ->
+            writeAddressSnapshot(
+                addresses,
+                includeFolderMembership = payloadVersion >= CURRENT_PAYLOAD_VERSION,
+            )
+        }
+        snapshot.folders?.let(::writeFolderSnapshot)
     }
 
     private fun BinaryReader.readVersionedSnapshot(payloadVersion: Int): SyncSnapshot {
-        val cards = readSnapshot()
-        return if (payloadVersion == CURRENT_PAYLOAD_VERSION) {
-            cards.copy(addresses = readAddressSnapshot())
-        } else {
-            cards
-        }
+        val cards = readSnapshot(includeFolderMembership = payloadVersion >= CURRENT_PAYLOAD_VERSION)
+        val withAddresses = if (payloadVersion >= ADDRESS_PAYLOAD_VERSION) {
+            cards.copy(addresses = readAddressSnapshot(includeFolderMembership = payloadVersion >= CURRENT_PAYLOAD_VERSION))
+        } else cards
+        return if (payloadVersion >= CURRENT_PAYLOAD_VERSION) {
+            withAddresses.copy(folders = readFolderSnapshot())
+        } else withAddresses
     }
 }
 
@@ -191,6 +203,11 @@ private class BinaryWriter : AutoCloseable {
         writeUtf8(value, UUID_BYTES)
     }
 
+    fun writeNullableUuid(value: String?) {
+        writeBoolean(value != null)
+        value?.let(::writeUuid)
+    }
+
     fun writeSizedBytes(value: ByteArray, exactBytes: Int) {
         require(value.size == exactBytes) { "Invalid exchange binary value." }
         output.writeInt(value.size)
@@ -208,9 +225,9 @@ private class BinaryWriter : AutoCloseable {
         }
     }
 
-    fun writeCardPayload(payload: CardSyncPayload) {
+    fun writeCardPayload(payload: CardSyncPayload, includeFolderMembership: Boolean) {
         val nested = BinaryWriter().use { card ->
-            card.writeInt(payload.schemaVersion)
+            card.writeInt(if (includeFolderMembership) 2 else 1)
             card.writeUtf8(payload.nickname, MAX_NICKNAME_BYTES)
             card.writeUtf8(payload.issuerName, MAX_ISSUER_BYTES)
             card.writeUtf8(payload.cardNumber, MAX_CARD_NUMBER_BYTES)
@@ -220,6 +237,7 @@ private class BinaryWriter : AutoCloseable {
             if (payload.saveCvv) card.writeUtf8(requireNotNull(payload.cvv), MAX_CVV_BYTES)
             card.writeUtf8(payload.cardTemplateId, MAX_TEMPLATE_ID_BYTES)
             card.writeUtf8(payload.notes, MAX_NOTES_BYTES)
+            if (includeFolderMembership) card.writeNullableUuid(payload.folderId)
             card.toByteArray()
         }
         try {
@@ -233,9 +251,9 @@ private class BinaryWriter : AutoCloseable {
         }
     }
 
-    fun writeAddressPayload(payload: AddressSyncPayload) {
+    fun writeAddressPayload(payload: AddressSyncPayload, includeFolderMembership: Boolean) {
         val nested = BinaryWriter().use { address ->
-            address.writeInt(payload.schemaVersion)
+            address.writeInt(if (includeFolderMembership) 2 else 1)
             address.writeUtf8(payload.nickname, MAX_NICKNAME_BYTES)
             address.writeUtf8(payload.detailedAddress, MAX_ADDRESS_BYTES)
             address.writeUtf8(payload.city, MAX_CITY_BYTES)
@@ -243,6 +261,7 @@ private class BinaryWriter : AutoCloseable {
             address.writeUtf8(payload.postalCode, MAX_POSTAL_CODE_BYTES)
             address.writeUtf8(payload.country, MAX_COUNTRY_BYTES)
             address.writeUtf8(payload.cardTemplateId, MAX_TEMPLATE_ID_BYTES)
+            if (includeFolderMembership) address.writeNullableUuid(payload.folderId)
             address.toByteArray()
         }
         try {
@@ -256,7 +275,7 @@ private class BinaryWriter : AutoCloseable {
         }
     }
 
-    fun writeSnapshot(snapshot: SyncSnapshot) {
+    fun writeSnapshot(snapshot: SyncSnapshot, includeFolderMembership: Boolean) {
         // Revalidate at the trust boundary even if a caller retained and mutated a source list.
         val checked = SyncSnapshot(snapshot.records.toList(), snapshot.order.copy(recordIds = snapshot.order.recordIds.toList()))
         output.writeInt(checked.records.size)
@@ -268,7 +287,7 @@ private class BinaryWriter : AutoCloseable {
                     writeByte(ACTIVE_RECORD)
                     writeLong(value.createdAtEpochMillis)
                     writeLong(value.updatedAtEpochMillis)
-                    writeCardPayload(value.payload)
+                    writeCardPayload(value.payload, includeFolderMembership)
                 }
                 is SyncRecordValue.Tombstone -> {
                     writeByte(TOMBSTONE_RECORD)
@@ -282,7 +301,10 @@ private class BinaryWriter : AutoCloseable {
         checked.order.recordIds.forEach(::writeUuid)
     }
 
-    fun writeAddressSnapshot(snapshot: AddressSyncSnapshot) {
+    fun writeAddressSnapshot(
+        snapshot: AddressSyncSnapshot,
+        includeFolderMembership: Boolean,
+    ) {
         val checked = AddressSyncSnapshot(
             records = snapshot.records.toList(),
             order = snapshot.order.copy(recordIds = snapshot.order.recordIds.toList()),
@@ -296,7 +318,7 @@ private class BinaryWriter : AutoCloseable {
                     writeByte(ACTIVE_RECORD)
                     writeLong(value.createdAtEpochMillis)
                     writeLong(value.updatedAtEpochMillis)
-                    writeAddressPayload(value.payload)
+                    writeAddressPayload(value.payload, includeFolderMembership)
                 }
                 is AddressSyncRecordValue.Tombstone -> {
                     writeByte(TOMBSTONE_RECORD)
@@ -308,6 +330,39 @@ private class BinaryWriter : AutoCloseable {
         writeLong(checked.order.updatedAtEpochMillis)
         output.writeInt(checked.order.recordIds.size)
         checked.order.recordIds.forEach(::writeUuid)
+    }
+
+    fun writeFolderSnapshot(snapshot: FolderSyncSnapshot) {
+        val checked = FolderSyncSnapshot(snapshot.records.toList())
+        output.writeInt(checked.records.size)
+        checked.records.sortedBy(FolderSyncRecord::recordId).forEach { record ->
+            writeUuid(record.recordId)
+            writeVersionVector(record.version)
+            when (val value = record.value) {
+                is FolderSyncRecordValue.Active -> {
+                    writeByte(ACTIVE_RECORD)
+                    writeLong(value.createdAtEpochMillis)
+                    writeLong(value.updatedAtEpochMillis)
+                    val nested = BinaryWriter().use { folder ->
+                        folder.writeInt(value.payload.schemaVersion)
+                        folder.writeByte(value.payload.collection.ordinal)
+                        folder.writeUtf8(value.payload.name, MAX_FOLDER_NAME_BYTES)
+                        folder.toByteArray()
+                    }
+                    try {
+                        require(nested.size <= SyncProtocolLimits.FOLDER_PAYLOAD_BYTES)
+                        output.writeInt(nested.size)
+                        output.write(nested)
+                    } finally {
+                        nested.fill(0)
+                    }
+                }
+                is FolderSyncRecordValue.Tombstone -> {
+                    writeByte(TOMBSTONE_RECORD)
+                    writeLong(value.deletedAtEpochMillis)
+                }
+            }
+        }
     }
 
     fun toByteArray(): ByteArray {
@@ -370,7 +425,7 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
         return VersionVector.of(entries)
     }
 
-    fun readSnapshot(): SyncSnapshot {
+    fun readSnapshot(includeFolderMembership: Boolean): SyncSnapshot {
         val count = readInt()
         if (count !in 0..SyncProtocolLimits.RECORDS) limitExceeded()
         val records = ArrayList<SyncRecord>(count)
@@ -381,7 +436,7 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
                 ACTIVE_RECORD -> {
                     val createdAt = readLong()
                     val updatedAt = readLong()
-                    val payload = readCardPayloadCorrectly()
+                    val payload = readCardPayloadCorrectly(includeFolderMembership)
                     SyncRecordValue.Active(payload, createdAt, updatedAt)
                 }
                 TOMBSTONE_RECORD -> SyncRecordValue.Tombstone(readLong())
@@ -397,7 +452,7 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
         return SyncSnapshot(records, SyncOrder(orderVersion, orderUpdatedAt, orderIds))
     }
 
-    fun readAddressSnapshot(): AddressSyncSnapshot {
+    fun readAddressSnapshot(includeFolderMembership: Boolean): AddressSyncSnapshot {
         val count = readInt()
         if (count !in 0..SyncProtocolLimits.ADDRESS_RECORDS) limitExceeded()
         val records = ArrayList<AddressSyncRecord>(count)
@@ -408,7 +463,7 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
                 ACTIVE_RECORD -> {
                     val createdAt = readLong()
                     val updatedAt = readLong()
-                    val payload = readAddressPayload()
+                    val payload = readAddressPayload(includeFolderMembership)
                     AddressSyncRecordValue.Active(payload, createdAt, updatedAt)
                 }
                 TOMBSTONE_RECORD -> AddressSyncRecordValue.Tombstone(readLong())
@@ -424,12 +479,12 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
         return AddressSyncSnapshot(records, SyncOrder(orderVersion, orderUpdatedAt, orderIds))
     }
 
-    private fun readCardPayloadCorrectly(): CardSyncPayload {
+    private fun readCardPayloadCorrectly(includeFolderMembership: Boolean): CardSyncPayload {
         val encoded = readLengthBoundedBytes(SyncProtocolLimits.CARD_PAYLOAD_BYTES)
         return try {
             BinaryReader(encoded).use { card ->
                 val schemaVersion = card.readInt()
-                if (schemaVersion != 1) throw SyncProtocolException(SyncErrorCode.UNSUPPORTED_VERSION)
+                if (schemaVersion !in 1..2) throw SyncProtocolException(SyncErrorCode.UNSUPPORTED_VERSION)
                 val nickname = card.readUtf8(MAX_NICKNAME_BYTES)
                 val issuerName = card.readUtf8(MAX_ISSUER_BYTES)
                 val cardNumber = card.readUtf8(MAX_CARD_NUMBER_BYTES)
@@ -439,6 +494,9 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
                 val cvv = if (saveCvv) card.readUtf8(MAX_CVV_BYTES) else null
                 val templateId = card.readUtf8(MAX_TEMPLATE_ID_BYTES)
                 val notes = card.readUtf8(MAX_NOTES_BYTES)
+                val folderId = if (includeFolderMembership && schemaVersion >= 2) {
+                    card.readNullableUuid()
+                } else null
                 card.requireEnd()
                 CardSyncPayload(
                     schemaVersion = schemaVersion,
@@ -451,6 +509,7 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
                     cvv = cvv,
                     cardTemplateId = templateId,
                     notes = notes,
+                    folderId = folderId,
                 )
             }
         } finally {
@@ -458,12 +517,12 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
         }
     }
 
-    private fun readAddressPayload(): AddressSyncPayload {
+    private fun readAddressPayload(includeFolderMembership: Boolean): AddressSyncPayload {
         val encoded = readLengthBoundedBytes(SyncProtocolLimits.ADDRESS_PAYLOAD_BYTES)
         return try {
             BinaryReader(encoded).use { address ->
                 val schemaVersion = address.readInt()
-                if (schemaVersion != 1) {
+                if (schemaVersion !in 1..2) {
                     throw SyncProtocolException(SyncErrorCode.UNSUPPORTED_VERSION)
                 }
                 val payload = AddressSyncPayload(
@@ -475,6 +534,9 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
                     postalCode = address.readUtf8(MAX_POSTAL_CODE_BYTES),
                     country = address.readUtf8(MAX_COUNTRY_BYTES),
                     cardTemplateId = address.readUtf8(MAX_TEMPLATE_ID_BYTES),
+                    folderId = if (includeFolderMembership && schemaVersion >= 2) {
+                        address.readNullableUuid()
+                    } else null,
                 )
                 address.requireEnd()
                 payload
@@ -483,6 +545,48 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
             encoded.fill(0)
         }
     }
+
+    fun readFolderSnapshot(): FolderSyncSnapshot {
+        val count = readInt()
+        if (count !in 0..SyncProtocolLimits.FOLDER_RECORDS) limitExceeded()
+        val records = ArrayList<FolderSyncRecord>(count)
+        repeat(count) {
+            val recordId = readUuid()
+            val version = readVersionVector()
+            val value = when (readByte()) {
+                ACTIVE_RECORD -> {
+                    val createdAt = readLong()
+                    val updatedAt = readLong()
+                    val encoded = readLengthBoundedBytes(SyncProtocolLimits.FOLDER_PAYLOAD_BYTES)
+                    val payload = try {
+                        BinaryReader(encoded).use { folder ->
+                            val schemaVersion = folder.readInt()
+                            if (schemaVersion != 1) {
+                                throw SyncProtocolException(SyncErrorCode.UNSUPPORTED_VERSION)
+                            }
+                            val collectionOrdinal = folder.readByte()
+                            val collection = FolderCollectionKind.entries.getOrNull(collectionOrdinal)
+                                ?: invalidFormat()
+                            FolderSyncPayload(
+                                schemaVersion = schemaVersion,
+                                collection = collection,
+                                name = folder.readUtf8(MAX_FOLDER_NAME_BYTES),
+                            ).also { folder.requireEnd() }
+                        }
+                    } finally {
+                        encoded.fill(0)
+                    }
+                    FolderSyncRecordValue.Active(payload, createdAt, updatedAt)
+                }
+                TOMBSTONE_RECORD -> FolderSyncRecordValue.Tombstone(readLong())
+                else -> invalidFormat()
+            }
+            records += FolderSyncRecord(recordId, version, value)
+        }
+        return FolderSyncSnapshot(records)
+    }
+
+    private fun readNullableUuid(): String? = if (readBoolean()) readUuid() else null
 
     private fun readLengthBoundedBytes(maxBytes: Int): ByteArray {
         val length = readInt()
@@ -537,5 +641,6 @@ private const val MAX_CITY_BYTES = 400
 private const val MAX_OTHER_BYTES = 800
 private const val MAX_POSTAL_CODE_BYTES = 80
 private const val MAX_COUNTRY_BYTES = 400
+private const val MAX_FOLDER_NAME_BYTES = 200
 private const val ACTIVE_RECORD = 1
 private const val TOMBSTONE_RECORD = 2
