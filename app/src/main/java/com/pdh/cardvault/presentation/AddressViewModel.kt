@@ -125,6 +125,8 @@ data class AddressesUiState(
     val addresses: List<AddressListItemUiModel>,
     val folders: List<VaultFolderUiModel> = emptyList(),
     val folderOrder: List<UUID?> = listOf(null),
+    val walletOrder: List<String> = emptyList(),
+    val selectedFolderId: UUID? = null,
     val sortingInProgress: Boolean,
     val form: AddressFormUiState,
     val detail: AddressDetailUiState,
@@ -182,6 +184,7 @@ class AddressViewModel internal constructor(
                 val addresses = repository.getAddressList().map(PersistentAddressListItem::toUiModel)
                 val folders = loadFolders(addresses)
                 val folderOrder = loadFolderOrder()
+                val walletOrder = folderRepository?.getWalletOrder(VaultFolderKind.ADDRESSES).orEmpty()
                 if (lifecycleEpoch != expectedEpoch) return@launch
                 _uiState.update {
                     it.copy(
@@ -189,6 +192,8 @@ class AddressViewModel internal constructor(
                         addresses = addresses,
                         folders = folders,
                         folderOrder = folderOrder,
+                        walletOrder = walletOrder,
+                        selectedFolderId = it.selectedFolderId?.takeIf { id -> folders.any { folder -> folder.id == id } },
                         sortingInProgress = false,
                         operationMessage = AddressOperationMessage.None,
                     )
@@ -250,6 +255,7 @@ class AddressViewModel internal constructor(
                 val addresses = repository.getAddressList().map(PersistentAddressListItem::toUiModel)
                 val folders = loadFolders(addresses)
                 val folderOrder = loadFolderOrder()
+                val walletOrder = folderRepository?.getWalletOrder(VaultFolderKind.ADDRESSES).orEmpty()
                 if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
                 activeDetailId = null
                 _uiState.update { current ->
@@ -257,6 +263,8 @@ class AddressViewModel internal constructor(
                         addresses = addresses,
                         folders = folders,
                         folderOrder = folderOrder,
+                        walletOrder = walletOrder,
+                        selectedFolderId = current.selectedFolderId?.takeIf { id -> folders.any { folder -> folder.id == id } },
                         sortingInProgress = false,
                         detail = AddressDetailUiState.Hidden,
                         edit = AddressEditUiState.Hidden,
@@ -653,8 +661,40 @@ class AddressViewModel internal constructor(
         return true
     }
 
-    fun createFolder(name: String): Boolean = runFolderOperation {
-        createFolder(VaultFolderKind.ADDRESSES, name)
+    fun createFolder(name: String, parentFolderId: UUID? = null): Boolean = runFolderOperation {
+        createFolder(VaultFolderKind.ADDRESSES, name, parentFolderId)
+    }
+
+    fun reorderWalletEntries(reorderedKeys: List<String>): Boolean {
+        val state = _uiState.value
+        val available = state.folders.map { com.pdh.cardvault.wallet.WalletDisplayOrder.folder(it.id.toString()) } +
+            state.addresses.map { com.pdh.cardvault.wallet.WalletDisplayOrder.record(it.id.toString()) }
+        val all = com.pdh.cardvault.wallet.WalletDisplayOrder.normalize(state.walletOrder, available)
+        val merged = runCatching { com.pdh.cardvault.wallet.WalletDisplayOrder.mergeVisible(all, reorderedKeys) }.getOrNull() ?: return false
+        val folders = folderRepository ?: return false
+        if (state.vaultContentState != VaultContentState.Ready || !repository.isUnlocked()) return false
+        val epoch = lifecycleEpoch
+        _uiState.update { it.copy(walletOrder = merged) }
+        folderOrderJob?.cancel()
+        folderOrderJob = workScope.launch {
+            try {
+                folders.reorderWalletEntries(VaultFolderKind.ADDRESSES, merged)
+            } catch (exception: CancellationException) { throw exception
+            } catch (_: Exception) {
+                if (isCurrentReadyEpoch(epoch)) _uiState.update {
+                    it.copy(walletOrder = state.walletOrder, operationMessage = AddressOperationMessage.StorageFailed)
+                }
+            }
+        }
+        return true
+    }
+
+    fun selectAddressFolder(folderId: UUID?) {
+        _uiState.update { current ->
+            if (current.vaultContentState != VaultContentState.Ready ||
+                (folderId != null && current.folders.none { it.id == folderId })
+            ) current else current.copy(selectedFolderId = folderId)
+        }
     }
 
     fun reorderFolders(orderedIds: List<UUID?>): Boolean {
@@ -701,12 +741,25 @@ class AddressViewModel internal constructor(
         if (!renameFolder(folderId, name)) throw IllegalStateException()
     }
 
+    fun setFolderColor(folderId: UUID, colorRgb: Int): Boolean = runFolderOperation {
+        if (!setFolderColor(folderId, colorRgb)) throw IllegalStateException()
+    }
+
+    fun moveFolder(folderId: UUID, parentFolderId: UUID?): Boolean = runFolderOperation {
+        if (!moveFolder(folderId, parentFolderId)) throw IllegalStateException()
+    }
+
     fun deleteFolder(folderId: UUID): Boolean = runFolderOperation {
         if (!deleteFolder(folderId)) throw IllegalStateException()
     }
 
-    fun moveAddressToFolder(addressId: UUID, folderId: UUID?): Boolean = runFolderOperation {
-        if (!moveAddressToFolder(addressId, folderId)) throw IllegalStateException()
+    fun moveAddressToFolder(addressId: UUID, folderId: UUID?): Boolean {
+        val state = _uiState.value
+        val address = state.addresses.firstOrNull { it.id == addressId } ?: return false
+        if (address.folderId == folderId || (folderId != null && state.folders.none { it.id == folderId })) return false
+        return runFolderOperation {
+            if (!moveAddressToFolder(addressId, folderId)) throw IllegalStateException()
+        }
     }
 
     fun onNavigationEventHandled(event: AddressNavigationEvent) {
@@ -741,9 +794,16 @@ class AddressViewModel internal constructor(
                 val addresses = repository.getAddressList().map(PersistentAddressListItem::toUiModel)
                 val refreshedFolders = loadFolders(addresses)
                 val refreshedOrder = loadFolderOrder()
+                val walletOrder = folders.getWalletOrder(VaultFolderKind.ADDRESSES)
                 if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
                 _uiState.update {
-                    it.copy(addresses = addresses, folders = refreshedFolders, folderOrder = refreshedOrder)
+                    it.copy(
+                        addresses = addresses,
+                        folders = refreshedFolders,
+                        folderOrder = refreshedOrder,
+                        walletOrder = walletOrder,
+                        selectedFolderId = it.selectedFolderId?.takeIf { id -> refreshedFolders.any { folder -> folder.id == id } },
+                    )
                 }
             } catch (exception: CancellationException) {
                 throw exception
@@ -756,10 +816,13 @@ class AddressViewModel internal constructor(
         return true
     }
 
-    private suspend fun loadFolders(addresses: List<AddressListItemUiModel>): List<VaultFolderUiModel> =
-        folderRepository?.getFolders(VaultFolderKind.ADDRESSES)?.map { folder ->
-            folder.toUiModel(addresses.count { it.folderId == folder.id })
-        }.orEmpty()
+    private suspend fun loadFolders(addresses: List<AddressListItemUiModel>): List<VaultFolderUiModel> {
+        val folders = folderRepository?.getFolders(VaultFolderKind.ADDRESSES).orEmpty()
+        val membership = addresses.map(AddressListItemUiModel::folderId)
+        return folders.map { folder ->
+            folder.toUiModel(countFolderTreeItems(folders, folder.id, membership))
+        }
+    }
 
     private suspend fun loadFolderOrder(): List<UUID?> =
         folderRepository?.getFolderOrder(VaultFolderKind.ADDRESSES) ?: listOf(null)
@@ -833,7 +896,7 @@ private fun PersistentAddressListItem.toUiModel(): AddressListItemUiModel =
     AddressListItemUiModel(id, nickname, cardTemplateId, folderId)
 
 private fun PersistentVaultFolder.toUiModel(itemCount: Int): VaultFolderUiModel =
-    VaultFolderUiModel(id = id, name = name, itemCount = itemCount)
+    VaultFolderUiModel(id = id, name = name, itemCount = itemCount, parentFolderId = parentFolderId, colorRgb = colorRgb)
 
 private fun PersistentAddressDetail.toUiModel(): AddressDetailUiModel = AddressDetailUiModel(
     nickname,

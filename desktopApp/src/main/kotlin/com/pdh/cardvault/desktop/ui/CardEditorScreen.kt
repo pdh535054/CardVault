@@ -30,6 +30,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -96,7 +98,7 @@ fun CardEditorScreen(controller: DesktopAppController, modifier: Modifier = Modi
                     TextButton(onClick = { controller.section = DesktopSection.Wallet }) { Text("返回") }
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        if (draft.id == null) "添加银行卡" else "编辑银行卡",
+                        if (draft.isTemplateCopy) "以此卡新建" else if (draft.id == null) "添加银行卡" else "编辑银行卡",
                         style = MaterialTheme.typography.headlineMedium,
                     )
                 }
@@ -125,6 +127,7 @@ fun CardEditorScreen(controller: DesktopAppController, modifier: Modifier = Modi
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(17.dp),
                 ) {
+                if (draft.id == null) DesktopCardDestinationPicker(controller)
                 EditorField(
                     value = draft.nickname,
                     onValueChange = { value -> controller.updateDraft { it.copy(nickname = value.take(50)) } },
@@ -291,6 +294,26 @@ fun CardEditorScreen(controller: DesktopAppController, modifier: Modifier = Modi
 }
 
 private enum class ColorTarget { Cover, Nickname }
+
+@Composable
+private fun DesktopCardDestinationPicker(controller: DesktopAppController) {
+    var open by remember { mutableStateOf(false) }
+    val selected = controller.editingDraft.folderId
+    OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
+        Text("保存到：" + (selected?.let { desktopFolderPath(controller.cardFolders, it) } ?: "未归档"), maxLines = 2)
+    }
+    if (open) AlertDialog(onDismissRequest = { open = false }, title = { Text("选择目标文件夹") },
+        text = {
+            Column(Modifier.height(340.dp).verticalScroll(rememberScrollState())) {
+                TextButton(onClick = { open = false; controller.selectDraftFolder(null) }) { Text("未归档") }
+                controller.cardFolders.forEach { folder ->
+                    TextButton(onClick = { open = false; controller.selectDraftFolder(folder.id) }) {
+                        Text(desktopFolderPath(controller.cardFolders, folder.id))
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { open = false }) { Text("取消") } })
+}
 
 @Composable
 internal fun ColorPickerOverlay(initial: Color, onDismiss: () -> Unit, onConfirm: (Color) -> Unit) {

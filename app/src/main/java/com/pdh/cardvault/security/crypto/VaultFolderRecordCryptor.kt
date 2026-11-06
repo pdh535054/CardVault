@@ -16,8 +16,11 @@ enum class VaultFolderCollection {
 data class VaultFolderPayload(
     val collection: VaultFolderCollection,
     val name: String,
+    val parentFolderId: UUID? = null,
+    val colorRgb: Int = com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB,
 ) {
     init {
+        com.pdh.cardvault.wallet.FolderAppearance.requireValidColor(colorRgb)
         require(name == name.trim() && name.codePointCount(0, name.length) in 1..50) {
             "The folder payload is invalid."
         }
@@ -70,7 +73,7 @@ class VaultFolderRecordCryptor internal constructor(
     }
 
     fun decrypt(recordId: UUID, encrypted: EncryptedVaultFolderRecord, dek: ByteArray): VaultFolderPayload {
-        if (encrypted.cryptoVersion != CRYPTO_VERSION || encrypted.payloadSchemaVersion != SCHEMA_VERSION) {
+        if (encrypted.cryptoVersion != CRYPTO_VERSION || encrypted.payloadSchemaVersion !in 1..SCHEMA_VERSION) {
             throw UnsupportedCryptoVersionException()
         }
         val keyBytes = validatedDekCopy(dek)
@@ -97,7 +100,7 @@ class VaultFolderRecordCryptor internal constructor(
         val name = payload.name.toByteArray(StandardCharsets.UTF_8)
         return try {
             require(name.size <= MAX_NAME_BYTES)
-            ByteBuffer.allocate(Int.SIZE_BYTES * 4 + MAGIC.size + name.size)
+            ByteBuffer.allocate(Int.SIZE_BYTES * 5 + MAGIC.size + name.size + 1 + if (payload.parentFolderId != null) 16 else 0)
                 .order(ByteOrder.BIG_ENDIAN)
                 .putInt(MAGIC.size)
                 .put(MAGIC)
@@ -105,6 +108,9 @@ class VaultFolderRecordCryptor internal constructor(
                 .putInt(payload.collection.ordinal)
                 .putInt(name.size)
                 .put(name)
+                .put(if (payload.parentFolderId == null) 0.toByte() else 1.toByte())
+                .apply { payload.parentFolderId?.let { putLong(it.mostSignificantBits).putLong(it.leastSignificantBits) } }
+                .putInt(payload.colorRgb)
                 .array()
         } finally {
             name.fill(0)
@@ -121,7 +127,8 @@ class VaultFolderRecordCryptor internal constructor(
         } finally {
             magic.fill(0)
         }
-        if (buffer.int != SCHEMA_VERSION) throw UnsupportedCryptoVersionException()
+        val schemaVersion = buffer.int
+        if (schemaVersion !in 1..SCHEMA_VERSION) throw UnsupportedCryptoVersionException()
         val collection = VaultFolderCollection.entries.getOrNull(buffer.int)
             ?: throw InvalidEncryptedPayloadException()
         val nameLength = buffer.int
@@ -137,8 +144,16 @@ class VaultFolderRecordCryptor internal constructor(
         } finally {
             bytes.fill(0)
         }
+        val parentId = if (schemaVersion >= 2) {
+            when (buffer.get().toInt()) {
+                0 -> null
+                1 -> UUID(buffer.long, buffer.long)
+                else -> throw InvalidEncryptedPayloadException()
+            }
+        } else null
+        val colorRgb = if (schemaVersion >= 3) buffer.int else com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB
         if (buffer.hasRemaining()) throw InvalidEncryptedPayloadException()
-        VaultFolderPayload(collection, name)
+        VaultFolderPayload(collection, name, parentId, colorRgb)
     } catch (exception: UnsupportedCryptoVersionException) {
         throw exception
     } catch (exception: InvalidEncryptedPayloadException) {
@@ -155,7 +170,7 @@ class VaultFolderRecordCryptor internal constructor(
     }
 
     private companion object {
-        const val SCHEMA_VERSION = 1
+        const val SCHEMA_VERSION = 3
         const val CRYPTO_VERSION = 1
         const val MAX_NAME_BYTES = 200
         const val AES_ALGORITHM = "AES"

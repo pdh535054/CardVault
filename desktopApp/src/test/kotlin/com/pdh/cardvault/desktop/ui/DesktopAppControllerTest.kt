@@ -5,6 +5,7 @@ import com.pdh.cardvault.desktop.data.EncryptedDesktopVault
 import com.pdh.cardvault.desktop.data.LocalKeyProtector
 import com.pdh.cardvault.desktop.model.CardCoverStyle
 import com.pdh.cardvault.desktop.model.DesktopCard
+import com.pdh.cardvault.desktop.model.DesktopFolderKind
 import com.pdh.cardvault.desktop.security.SensitiveAction
 import com.pdh.cardvault.desktop.security.SensitiveActionAuthenticator
 import com.pdh.cardvault.desktop.sync.SyncCoreDesktopGateway
@@ -22,6 +23,101 @@ import kotlin.test.assertTrue
 
 class DesktopAppControllerTest {
     private val clock = Clock.fixed(Instant.parse("2026-07-17T00:00:00Z"), ZoneOffset.UTC)
+
+    @Test fun `explicit card moves support nested parent other and root without changing contents`() {
+        val authenticator = RecordingAuthenticator(accepted = false)
+        val controller = controllerWithCard(authenticator)
+        val original = controller.cards.single()
+        controller.createFolder("Synthetic parent", DesktopFolderKind.CARDS)
+        val parent = controller.cardFolders.single().id
+        controller.createFolder("Synthetic child", DesktopFolderKind.CARDS, parent)
+        val child = controller.cardFolders.first { it.parentFolderId == parent }.id
+        controller.createFolder("Synthetic other", DesktopFolderKind.CARDS)
+        val other = controller.cardFolders.first { it.name == "Synthetic other" }.id
+        controller.selectCardFolder(child)
+        for (destination in listOf(child, parent, other, null)) {
+            assertTrue(controller.moveCardToFolder(original.id, destination))
+            val moved = controller.cards.single()
+            assertEquals(destination, moved.folderId)
+            assertEquals(original.copy(folderId = destination, updatedAtEpochMillis = moved.updatedAtEpochMillis), moved)
+            assertEquals(child, controller.selectedCardFolderId)
+        }
+        assertFalse(controller.moveCardToFolder(original.id, java.util.UUID.randomUUID().toString()))
+        assertTrue(authenticator.actions.isEmpty())
+        controller.close()
+    }
+
+    @Test fun `explicit address moves and mixed reorder never accidentally archive records`() {
+        val controller = controllerWithCard(RecordingAuthenticator(accepted = false))
+        controller.startAddAddress()
+        controller.updateAddressDraft { it.copy(nickname = "Synthetic address", detailedAddress = "Synthetic road", city = "Synthetic city",
+            postalCode = "TEST-000", country = "Synthetic country") }
+        assertTrue(controller.saveAddressDraft())
+        val address = controller.addresses.single()
+        controller.createFolder("Synthetic addresses", DesktopFolderKind.ADDRESSES)
+        val addressFolder = controller.addressFolders.single().id
+        assertTrue(controller.moveAddressToFolder(address.id, addressFolder))
+        assertEquals(addressFolder, controller.addresses.single().folderId)
+        assertTrue(controller.moveAddressToFolder(address.id, null))
+        assertEquals(null, controller.addresses.single().folderId)
+        val addressOrder = listOf("f:$addressFolder", "r:${address.id}")
+        assertTrue(controller.reorderWalletEntries(DesktopFolderKind.ADDRESSES, addressOrder))
+        assertEquals(addressOrder, controller.addressWalletOrder)
+        assertEquals(null, controller.addresses.single().folderId)
+
+        controller.createFolder("Synthetic cards", DesktopFolderKind.CARDS)
+        val card = controller.cards.single()
+        val folder = controller.cardFolders.single().id
+        for (order in listOf(listOf("r:${card.id}", "f:$folder"), listOf("f:$folder", "r:${card.id}"))) {
+            assertTrue(controller.reorderWalletEntries(DesktopFolderKind.CARDS, order))
+            assertEquals(order, controller.cardWalletOrder)
+            assertEquals(card, controller.cards.single())
+        }
+        assertEquals(1, controller.addresses.size)
+        assertEquals(1, controller.cards.size)
+        controller.close()
+    }
+
+    @Test fun `copy as new retains design clears secrets and supports any destination`() {
+        for (destinationIndex in 0..2) {
+            val authenticator = RecordingAuthenticator(accepted = false)
+            val controller = controllerWithCard(authenticator)
+            controller.createFolder("Synthetic source", DesktopFolderKind.CARDS)
+            controller.createFolder("Synthetic destination", DesktopFolderKind.CARDS)
+            val sourceFolder = controller.cardFolders.first { it.name == "Synthetic source" }.id
+            val targetFolder = controller.cardFolders.first { it.name == "Synthetic destination" }.id
+            val sourceId = controller.cards.single().id
+            assertTrue(controller.moveCardToFolder(sourceId, sourceFolder))
+            val original = controller.cards.single()
+            assertTrue(controller.startCopy(sourceId))
+            val draft = controller.editingDraft
+            assertTrue(draft.isTemplateCopy)
+            assertEquals(null, draft.id)
+            assertEquals(original.nickname, draft.nickname)
+            assertEquals(original.style, draft.style)
+            assertEquals(original.notes, draft.notes)
+            assertEquals(sourceFolder, draft.folderId)
+            assertEquals("", draft.cardNumber)
+            assertEquals("", draft.expiryDigits)
+            assertEquals("", draft.cvv)
+            assertFalse(controller.saveDraft())
+            assertEquals(1, controller.cards.size)
+
+            val destination = when (destinationIndex) { 0 -> sourceFolder; 1 -> targetFolder; else -> null }
+            controller.selectDraftFolder(destination)
+            controller.updateDraft { it.copy(cardNumber = "9".repeat(19), expiryDigits = "0199") }
+            assertTrue(controller.saveDraft())
+            val copy = controller.cards.first { it.id != sourceId }
+            assertEquals(destination, copy.folderId)
+            assertEquals(original.style, copy.style)
+            assertEquals(null, copy.cvv)
+            val unchanged = controller.cards.first { it.id == sourceId }
+            assertEquals(original.copy(sortOrder = unchanged.sortOrder), unchanged)
+            assertTrue(authenticator.actions.isEmpty())
+            assertEquals(destination, controller.selectedCardFolderId)
+            controller.close()
+        }
+    }
 
     @Test
     fun `concealment epoch advances without clearing unfinished draft`() {

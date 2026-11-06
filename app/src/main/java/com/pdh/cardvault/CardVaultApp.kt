@@ -372,9 +372,13 @@ fun CardVaultApp(
                         onCopyAddress = { id, part -> addressViewModel.copyAddress(id, part) },
                         onDeleteAddress = { id -> addressViewModel.deleteAddress(id) },
                         onAddressesReordered = addressViewModel::reorderAddresses,
+                        onAddressFolderSelected = addressViewModel::selectAddressFolder,
                         onAddressFoldersReordered = addressViewModel::reorderFolders,
-                        onCreateAddressFolder = { addressViewModel.createFolder(it) },
+                        onAddressWalletReordered = { addressViewModel.reorderWalletEntries(it) },
+                        onCreateAddressFolder = { name, parentId -> addressViewModel.createFolder(name, parentId) },
                         onRenameAddressFolder = { id, name -> addressViewModel.renameFolder(id, name) },
+                        onSetAddressFolderColor = { id, color -> addressViewModel.setFolderColor(id, color) },
+                        onMoveAddressFolder = { id, parentId -> addressViewModel.moveFolder(id, parentId) },
                         onDeleteAddressFolder = { addressViewModel.deleteFolder(it) },
                         onMoveAddressToFolder = { id, folderId ->
                             addressViewModel.moveAddressToFolder(id, folderId)
@@ -387,6 +391,8 @@ fun CardVaultApp(
                         onAddressNavigationEventHandled =
                             addressViewModel::onNavigationEventHandled,
                         onCardFormFieldChanged = cardsViewModel::updateField,
+                        onCardFormFolderSelected = cardsViewModel::selectAddFolder,
+                        onCreateFromCard = { cardsViewModel.prepareCardCopy(it) },
                         onConfirmSaveCvvRisk = cardsViewModel::confirmSaveCvvRisk,
                         onDismissSaveCvvRisk = cardsViewModel::dismissSaveCvvRisk,
                         onTemplateSelected = cardsViewModel::selectTemplate,
@@ -406,9 +412,15 @@ fun CardVaultApp(
                         onCardsReordered = { orderedIds ->
                             cardsViewModel.reorderCards(orderedIds)
                         },
+                        onCardFolderSelected = cardsViewModel::selectWalletFolder,
+                        onCardLastFourSearchQueryChanged =
+                            cardsViewModel::updateLastFourSearchQuery,
                         onCardFoldersReordered = cardsViewModel::reorderFolders,
+                        onCardWalletReordered = { cardsViewModel.reorderWalletEntries(it) },
                         onCreateCardFolder = { cardsViewModel.createFolder(it) },
                         onRenameCardFolder = { id, name -> cardsViewModel.renameFolder(id, name) },
+                        onSetCardFolderColor = { id, color -> cardsViewModel.setFolderColor(id, color) },
+                        onMoveCardFolder = { id, parentId -> cardsViewModel.moveFolder(id, parentId) },
                         onDeleteCardFolder = { cardsViewModel.deleteFolder(it) },
                         onMoveCardToFolder = { id, folderId ->
                             cardsViewModel.moveCardToFolder(id, folderId)

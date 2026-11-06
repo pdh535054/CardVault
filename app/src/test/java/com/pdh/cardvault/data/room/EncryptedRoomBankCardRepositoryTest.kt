@@ -26,9 +26,133 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class EncryptedRoomBankCardRepositoryTest {
+    @Test fun movingWholeFolderPreservesChildrenRecordsAndColorForBothCollections() = runBlocking {
+        for (kind in VaultFolderKind.entries) {
+            val fixture = fixture()
+            fixture.repository.unlockOrCreateVault()
+            val source = fixture.repository.createFolder(kind, "Synthetic source")
+            val child = fixture.repository.createFolder(kind, "Synthetic child", source)
+            val target = fixture.repository.createFolder(kind, "Synthetic target")
+            fixture.repository.setFolderColor(source, 0x27AE93)
+            val card = fixture.repository.add(validInput())
+            val address = fixture.repository.addAddress(validAddressInput())
+            if (kind == VaultFolderKind.CARDS) fixture.repository.moveCardToFolder(card, child)
+            else fixture.repository.moveAddressToFolder(address, child)
+            val cardsBefore = fixture.repository.getList()
+            val addressesBefore = fixture.repository.getAddressList()
+            assertTrue(fixture.repository.moveFolder(source, target))
+            fixture.repository.lock()
+            fixture.repository.unlockOrCreateVault()
+            val folders = fixture.repository.getFolders(kind)
+            assertEquals(target, folders.first { it.id == source }.parentFolderId)
+            assertEquals(source, folders.first { it.id == child }.parentFolderId)
+            assertEquals(0x27AE93, folders.first { it.id == source }.colorRgb)
+            assertEquals(cardsBefore, fixture.repository.getList())
+            assertEquals(addressesBefore, fixture.repository.getAddressList())
+            for ((from, to) in listOf(source to source, target to child)) {
+                try { fixture.repository.moveFolder(from, to); fail("Folder cycles must be rejected") }
+                catch (_: VaultStorageException) { }
+            }
+            assertEquals(folders, fixture.repository.getFolders(kind))
+        }
+    }
+    @Test fun explicitMovesSupportParentOtherFolderAndRootAndSurviveReopening() = runBlocking {
+        val fixture = fixture()
+        fixture.repository.unlockOrCreateVault()
+        val card = fixture.repository.add(validInput())
+        val address = fixture.repository.addAddress(validAddressInput())
+        val cardBefore = fixture.repository.getSecretsForAuthenticatedUse(card)
+        val addressBefore = fixture.repository.getAddressDetail(address)
+        val parent = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic parent")
+        val child = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic child", parent)
+        val other = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic other")
+        val addressParent = fixture.repository.createFolder(VaultFolderKind.ADDRESSES, "Synthetic address parent")
+        val addressChild = fixture.repository.createFolder(VaultFolderKind.ADDRESSES, "Synthetic address child", addressParent)
+        for ((cardDestination, addressDestination) in listOf(child to addressChild, parent to addressParent, other to addressChild, null to null)) {
+            assertTrue(fixture.repository.moveCardToFolder(card, cardDestination))
+            assertTrue(fixture.repository.moveAddressToFolder(address, addressDestination))
+            fixture.repository.lock()
+            fixture.repository.unlockOrCreateVault()
+            assertEquals(cardDestination, fixture.repository.getList().single().folderId)
+            assertEquals(addressDestination, fixture.repository.getAddressList().single().folderId)
+            assertEquals(cardBefore, fixture.repository.getSecretsForAuthenticatedUse(card))
+            assertEquals(addressBefore?.copy(folderId = addressDestination), fixture.repository.getAddressDetail(address))
+        }
+    }
+
+    @Test fun addingFromTemplateCanPersistDestinationWithoutASecondMoveOperation() = runBlocking {
+        val fixture = fixture()
+        fixture.repository.unlockOrCreateVault()
+        val folder = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic template destination")
+        val id = fixture.repository.add(validInput(nickname = "Synthetic new card").copy(folderId = folder.toString()))
+        assertEquals(folder, fixture.repository.getList().single { it.id == id }.folderId)
+        try {
+            fixture.repository.add(validInput().copy(folderId = UUID.randomUUID().toString()))
+            fail("Unknown destination must not create a card")
+        } catch (_: VaultStorageException) { }
+        assertEquals(1, fixture.repository.getList().size)
+    }
+
+    @Test fun folderColorSurvivesReopeningAndKeepsMembership() = runBlocking {
+        val fixture = fixture()
+        fixture.repository.unlockOrCreateVault()
+        val folder = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic colored folder")
+        val card = fixture.repository.add(validInput(nickname = "Synthetic color fixture"))
+        fixture.repository.moveCardToFolder(card, folder)
+        assertTrue(fixture.repository.setFolderColor(folder, 0x27AE93))
+        fixture.repository.lock()
+        fixture.repository.unlockOrCreateVault()
+        assertEquals(0x27AE93, fixture.repository.getFolders(VaultFolderKind.CARDS).single().colorRgb)
+        assertEquals(folder, fixture.repository.getList().single().folderId)
+        assertFalse(fixture.repository.setFolderColor(UUID.randomUUID(), 0x123456))
+    }
+
+    @Test fun mixedDisplayOrderPersistsWithoutChangingCardContents() = runBlocking {
+        val fixture = fixture()
+        fixture.repository.unlockOrCreateVault()
+        val folder = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic folder")
+        val first = fixture.repository.add(validInput(nickname = "Synthetic first"))
+        val second = fixture.repository.add(validInput(nickname = "Synthetic second"))
+        val order = listOf("r:$first", "f:$folder", "r:$second")
+        fixture.repository.reorderWalletEntries(VaultFolderKind.CARDS, order)
+        assertEquals(order, fixture.repository.getWalletOrder(VaultFolderKind.CARDS))
+        assertEquals(2, fixture.repository.getList().size)
+        assertEquals(1, fixture.repository.getFolders(VaultFolderKind.CARDS).size)
+        assertTrue(fixture.repository.getList().all { it.folderId == null })
+        fixture.repository.reorderWalletEntries(VaultFolderKind.CARDS, listOf("f:$folder", "r:$second", "r:$first"))
+        assertTrue(fixture.repository.getList().all { it.folderId == null })
+        fixture.repository.lock()
+        fixture.repository.unlockOrCreateVault()
+        assertEquals(listOf("f:$folder", "r:$second", "r:$first"), fixture.repository.getWalletOrder(VaultFolderKind.CARDS))
+    }
+
+    @Test
+    fun nestedFoldersSurviveReadAndDeletionMovesContentsToParent() = runBlocking {
+        val fixture = fixture()
+        fixture.repository.unlockOrCreateVault()
+        val parent = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic parent")
+        val child = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic child", parent)
+        val grandchild = fixture.repository.createFolder(VaultFolderKind.CARDS, "Synthetic grandchild", child)
+        try {
+            fixture.repository.moveFolder(parent, grandchild)
+            fail("A folder cycle must be rejected")
+        } catch (_: VaultStorageException) {
+            // Expected: no encrypted record was changed.
+        }
+        val card = fixture.repository.add(validInput(nickname = "Synthetic nested card"))
+        assertTrue(fixture.repository.moveCardToFolder(card, child))
+        assertEquals(parent, fixture.repository.getFolders(VaultFolderKind.CARDS).first { it.id == child }.parentFolderId)
+
+        assertTrue(fixture.repository.deleteFolder(child))
+        assertEquals(parent, fixture.repository.getFolders(VaultFolderKind.CARDS).first { it.id == grandchild }.parentFolderId)
+        assertEquals(parent, fixture.repository.getList().first { it.id == card }.folderId)
+        assertFalse(fixture.folderDao.getAll().any { it.ciphertext.containsUtf8("Synthetic child") })
+    }
+
     @Test
     fun encryptedCrudUsesOnlyCiphertextRowsAndContinuousFrontFirstOrder() = runBlocking {
         val fixture = fixture()
@@ -144,6 +268,7 @@ class EncryptedRoomBankCardRepositoryTest {
         )
 
         val listItem = fixture.repository.getList().single()
+        assertEquals("7".repeat(4), listItem.lastFour)
         val detail = requireNotNull(fixture.repository.getMaskedDetail(id))
         val listFields = PersistentCardListItem::class.java.declaredFields
             .map { field -> field.name.lowercase() }
@@ -162,6 +287,7 @@ class EncryptedRoomBankCardRepositoryTest {
         assertFalse("expiryyear" in detailFields)
         assertFalse("expired" in detailFields)
         assertFalse(listItem.toString().contains(fullNumber))
+        assertFalse(listItem.toString().contains(listItem.lastFour))
         assertFalse(detail.toString().contains(cvv))
         val secrets = requireNotNull(fixture.repository.getSecretsForAuthenticatedUse(id))
         assertEquals(fullNumber, secrets.cardNumber)

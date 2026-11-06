@@ -59,6 +59,7 @@ fun CardWalletStack(
     onCardsReordered: (List<UUID>) -> Unit,
     modifier: Modifier = Modifier,
     onCardDropped: ((UUID, Offset) -> Boolean)? = null,
+    reorderEnabled: Boolean = true,
 ) {
     if (cards.isEmpty()) return
 
@@ -138,12 +139,16 @@ fun CardWalletStack(
                         0f
                     }
                     val safeDescription = stringResource(
-                        R.string.card_stack_item_content_description,
+                        if (reorderEnabled) {
+                            R.string.card_stack_item_content_description
+                        } else {
+                            R.string.card_stack_search_item_content_description
+                        },
                         index + 1,
                         draftCards.size,
                     )
                     val accessibleActions = buildList {
-                        if (index > 0 && !sortingInProgress) {
+                        if (index > 0 && !sortingInProgress && reorderEnabled) {
                             add(
                                 CustomAccessibilityAction(moveUpActionLabel) {
                                     onCardsReordered(
@@ -154,7 +159,7 @@ fun CardWalletStack(
                                 },
                             )
                         }
-                        if (index < draftCards.lastIndex && !sortingInProgress) {
+                        if (index < draftCards.lastIndex && !sortingInProgress && reorderEnabled) {
                             add(
                                 CustomAccessibilityAction(moveDownActionLabel) {
                                     onCardsReordered(
@@ -190,8 +195,8 @@ fun CardWalletStack(
                             .onGloballyPositioned { coordinates ->
                                 if (!isDragging) cardOriginInRoot = coordinates.boundsInRoot().topLeft
                             }
-                            .pointerInput(card.id, sortingInProgress) {
-                                if (sortingInProgress) return@pointerInput
+                            .pointerInput(card.id, sortingInProgress, reorderEnabled) {
+                                if (sortingInProgress || !reorderEnabled) return@pointerInput
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { localOffset ->
                                         val start = latestDraftCards.indexOfFirst { it.id == card.id }

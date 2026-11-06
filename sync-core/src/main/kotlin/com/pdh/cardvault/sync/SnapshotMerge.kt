@@ -123,7 +123,8 @@ object SnapshotMerger {
             else -> FolderSnapshotMerger.merge(local.folders, normalizedIncoming.folders, resolverDeviceId)
         }
         conflicts += folderMerge.conflicts
-        val activeFolderKinds = folderMerge.snapshot?.records.orEmpty().mapNotNull { record ->
+        val sanitizedFolders = folderMerge.snapshot?.sanitizeHierarchy()
+        val activeFolderKinds = sanitizedFolders?.records.orEmpty().mapNotNull { record ->
             val value = record.value as? FolderSyncRecordValue.Active ?: return@mapNotNull null
             record.recordId to value.payload.collection
         }.toMap()
@@ -148,10 +149,33 @@ object SnapshotMerger {
                 records = sanitizedCards.sortedBy(SyncRecord::recordId),
                 order = mergedOrder,
                 addresses = sanitizedAddresses,
-                folders = folderMerge.snapshot,
+                folders = sanitizedFolders,
             ),
             conflicts = conflicts.toList(),
         )
+    }
+
+    private fun FolderSyncSnapshot.sanitizeHierarchy(): FolderSyncSnapshot {
+        val active = records.mapNotNull { record ->
+            val value = record.value as? FolderSyncRecordValue.Active ?: return@mapNotNull null
+            record.recordId to value.payload
+        }.toMap()
+        return copy(records = records.map { record ->
+            val value = record.value as? FolderSyncRecordValue.Active ?: return@map record
+            val parent = value.payload.parentFolderId ?: return@map record
+            val seen = mutableSetOf(record.recordId)
+            var next: String? = parent
+            var valid = true
+            while (next != null) {
+                val ancestor = active[next]
+                if (!seen.add(next) || ancestor == null || ancestor.collection != value.payload.collection) {
+                    valid = false
+                    break
+                }
+                next = ancestor.parentFolderId
+            }
+            if (valid) record else record.copy(value = value.copy(payload = value.payload.copy(parentFolderId = null)))
+        })
     }
 
     private fun SyncSnapshot.inheritFolderMembershipFrom(local: SyncSnapshot): SyncSnapshot {

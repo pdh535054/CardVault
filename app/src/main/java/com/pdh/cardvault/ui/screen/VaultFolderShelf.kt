@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,6 +61,7 @@ internal fun VaultFolderShelf(
     onSelect: (UUID?) -> Unit,
     onCreate: (String) -> Unit,
     onRename: (UUID, String) -> Unit,
+    onMove: (UUID, UUID?) -> Unit,
     onDelete: (UUID) -> Unit,
     onReorder: (List<UUID?>) -> Unit,
     onTargetBoundsChanged: (UUID?, Rect) -> Unit,
@@ -66,9 +69,10 @@ internal fun VaultFolderShelf(
 ) {
     var createDialog by remember { mutableStateOf(false) }
     var editingFolder by remember { mutableStateOf<VaultFolderUiModel?>(null) }
+    var movingFolder by remember { mutableStateOf<VaultFolderUiModel?>(null) }
     var deletingFolder by remember { mutableStateOf<VaultFolderUiModel?>(null) }
-    val sourceItems = remember(folders, unfiledCount, folderOrder) {
-        buildFolderShelfItems(folders, unfiledCount, folderOrder)
+    val sourceItems = remember(folders, unfiledCount, folderOrder, selectedFolderId) {
+        buildFolderShelfItems(folders, unfiledCount, folderOrder, selectedFolderId)
     }
     var draftItems by remember { mutableStateOf(sourceItems) }
     var dragStartItems by remember { mutableStateOf(sourceItems) }
@@ -86,12 +90,24 @@ internal fun VaultFolderShelf(
     }
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (selectedFolderId != null) {
+            val current = folders.firstOrNull { it.id == selectedFolderId }
+            TextButton(
+                onClick = { onSelect(current?.parentFolderId) },
+                modifier = Modifier.onGloballyPositioned {
+                    onTargetBoundsChanged(current?.parentFolderId, it.boundsInRoot())
+                },
+            ) {
+                Text("‹ 返回上级")
+            }
+            Text(folderPath(folders, selectedFolderId), style = MaterialTheme.typography.labelLarge)
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("文件夹", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(if (selectedFolderId == null) "文件夹" else "子文件夹", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             TextButton(onClick = { createDialog = true }) { Text("新建文件夹") }
         }
         val stepPx = with(density) { FOLDER_TILE_STEP.toPx() }
@@ -112,6 +128,7 @@ internal fun VaultFolderShelf(
                         onClick = { onSelect(item.id) },
                         onBoundsChanged = { onTargetBoundsChanged(item.id, it) },
                         onEdit = item.folder?.let { folder -> { editingFolder = folder } },
+                        onMove = item.folder?.let { folder -> { movingFolder = folder } },
                         onDelete = item.folder?.let { folder -> { deletingFolder = folder } },
                         modifier = Modifier
                             .zIndex(if (isDragging) draftItems.size + 1f else index.toFloat())
@@ -156,7 +173,9 @@ internal fun VaultFolderShelf(
                                         }
                                     },
                                     onDragEnd = {
-                                        if (draggingKey == item.key) onReorder(draftItems.map { it.id })
+                                        if (draggingKey == item.key) onReorder(
+                                            mergeFolderShelfOrder(folderOrder, draftItems.map { it.id }),
+                                        )
                                         draggingKey = null
                                         dragDistancePx = 0f
                                     },
@@ -173,7 +192,7 @@ internal fun VaultFolderShelf(
             Spacer(Modifier.width(2.dp))
         }
         Text(
-            "长按文件夹可调整顺序；长按卡片可拖入文件夹",
+            "拖动排序；在文件夹上停稳，显示「松手移入」后松手归档",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -201,11 +220,29 @@ internal fun VaultFolderShelf(
             },
         )
     }
+    movingFolder?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { movingFolder = null },
+            title = { Text("移动文件夹") },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    TextButton(onClick = { movingFolder = null; onMove(folder.id, null) }) { Text("顶层") }
+                    folders.filterNot { wouldCreateFolderCycle(folders, folder.id, it.id) }
+                        .forEach { destination ->
+                            TextButton(onClick = { movingFolder = null; onMove(folder.id, destination.id) }) {
+                                Text(folderPath(folders, destination.id), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                }
+            },
+            confirmButton = { TextButton(onClick = { movingFolder = null }) { Text("取消") } },
+        )
+    }
     deletingFolder?.let { folder ->
         AlertDialog(
             onDismissRequest = { deletingFolder = null },
             title = { Text("删除文件夹？") },
-            text = { Text("文件夹内的内容会移回“未归档”，不会删除银行卡或地址。") },
+            text = { Text("卡片和子文件夹会移至上一级，不会删除内容。") },
             confirmButton = {
                 TextButton(onClick = {
                     deletingFolder = null
@@ -228,6 +265,7 @@ private fun FolderTile(
     onBoundsChanged: (Rect) -> Unit,
     modifier: Modifier = Modifier,
     onEdit: (() -> Unit)? = null,
+    onMove: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
 ) {
     Surface(
@@ -254,6 +292,7 @@ private fun FolderTile(
                 Text("$count 张", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.weight(1f))
                 if (onEdit != null) Text("✎", modifier = Modifier.clickable(onClick = onEdit))
+                if (onMove != null) Text(" ↗", modifier = Modifier.clickable(onClick = onMove))
                 if (onDelete != null) Text(" ×", modifier = Modifier.clickable(onClick = onDelete))
             }
             Text(
@@ -280,12 +319,48 @@ private fun buildFolderShelfItems(
     folders: List<VaultFolderUiModel>,
     unfiledCount: Int,
     requestedOrder: List<UUID?>,
+    selectedFolderId: UUID?,
 ): List<FolderShelfItem> {
     val byId = folders.associateBy(VaultFolderUiModel::id)
     return normalizeFolderOrder(requestedOrder, folders.map(VaultFolderUiModel::id)).mapNotNull { id ->
-        if (id == null) FolderShelfItem(null, "未归档", unfiledCount, null)
-        else byId[id]?.let { FolderShelfItem(id, it.name, it.itemCount, it) }
+        if (id == null) {
+            if (selectedFolderId == null) FolderShelfItem(null, "未归档", unfiledCount, null) else null
+        } else byId[id]?.takeIf { it.parentFolderId == selectedFolderId }
+            ?.let { FolderShelfItem(id, it.name, it.itemCount, it) }
     }
+}
+
+/** Reorder only siblings; all other folders retain their existing global order. */
+internal fun mergeFolderShelfOrder(globalOrder: List<UUID?>, reorderedSiblings: List<UUID?>): List<UUID?> {
+    if (reorderedSiblings.size != reorderedSiblings.distinct().size) return globalOrder
+    val siblingIds = reorderedSiblings.toSet()
+    if (!globalOrder.containsAll(reorderedSiblings)) return globalOrder
+    val replacement = reorderedSiblings.iterator()
+    return globalOrder.map { if (it in siblingIds) replacement.next() else it }
+}
+
+internal fun wouldCreateFolderCycle(folders: List<VaultFolderUiModel>, movedId: UUID, destinationId: UUID): Boolean {
+    val byId = folders.associateBy(VaultFolderUiModel::id)
+    val visited = mutableSetOf<UUID>()
+    var next: UUID? = destinationId
+    while (next != null) {
+        if (next == movedId || !visited.add(next)) return true
+        next = byId[next]?.parentFolderId
+    }
+    return false
+}
+
+internal fun folderPath(folders: List<VaultFolderUiModel>, id: UUID): String {
+    val byId = folders.associateBy(VaultFolderUiModel::id)
+    val names = mutableListOf<String>()
+    val visited = mutableSetOf<UUID>()
+    var next: UUID? = id
+    while (next != null && visited.add(next)) {
+        val folder = byId[next] ?: break
+        names += folder.name
+        next = folder.parentFolderId
+    }
+    return names.asReversed().joinToString(" / ")
 }
 
 internal fun normalizeFolderOrder(
@@ -320,7 +395,7 @@ private val FOLDER_TILE_STEP = 160.dp
 private const val UNFILED_KEY = "__unfiled__"
 
 @Composable
-private fun FolderNameDialog(
+internal fun FolderNameDialog(
     title: String,
     initialValue: String,
     onDismiss: () -> Unit,

@@ -59,12 +59,22 @@ internal object FolderSnapshotMerger {
         VectorRelation.DOMINATES -> listOf(first)
         VectorRelation.IS_DOMINATED -> listOf(second)
         VectorRelation.EQUAL -> {
-            if (first.value != second.value) {
+            if (!sameFolderValue(first.value, second.value)) {
                 throw SyncProtocolException(SyncErrorCode.INVARIANT_VIOLATION)
             }
-            listOf(first)
+            listOf(if (((first.value as? FolderSyncRecordValue.Active)?.payload?.schemaVersion ?: 0) >=
+                ((second.value as? FolderSyncRecordValue.Active)?.payload?.schemaVersion ?: 0)) first else second)
         }
         VectorRelation.CONCURRENT -> mergeConcurrent(first, second, occupiedIds, resolverDeviceId)
+    }
+
+    private fun sameFolderValue(first: FolderSyncRecordValue, second: FolderSyncRecordValue): Boolean {
+        if (first is FolderSyncRecordValue.Active && second is FolderSyncRecordValue.Active) {
+            return first.createdAtEpochMillis == second.createdAtEpochMillis &&
+                first.updatedAtEpochMillis == second.updatedAtEpochMillis &&
+                first.payload.copy(schemaVersion = 3) == second.payload.copy(schemaVersion = 3)
+        }
+        return first == second
     }
 
     private fun mergeConcurrent(
@@ -74,7 +84,7 @@ internal object FolderSnapshotMerger {
         resolverDeviceId: String,
     ): List<FolderSyncRecord> {
         val mergedVersion = resolveVersion(first.version.merge(second.version), resolverDeviceId)
-        if (first.value == second.value) return listOf(first.copy(version = mergedVersion))
+        if (sameFolderValue(first.value, second.value)) return listOf(first.copy(version = mergedVersion))
         val firstDeleted = first.value is FolderSyncRecordValue.Tombstone
         val secondDeleted = second.value is FolderSyncRecordValue.Tombstone
         if (firstDeleted && secondDeleted) {
@@ -108,6 +118,8 @@ internal object FolderSnapshotMerger {
                 digest.update(1)
                 digest.update(value.payload.collection.ordinal.toByte())
                 digest.update(value.payload.name.toByteArray(StandardCharsets.UTF_8))
+                digest.update(value.payload.parentFolderId.orEmpty().toByteArray(StandardCharsets.US_ASCII))
+                digest.update(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(value.payload.colorRgb).array())
                 digest.update(ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN)
                     .putLong(value.createdAtEpochMillis).putLong(value.updatedAtEpochMillis).array())
             }

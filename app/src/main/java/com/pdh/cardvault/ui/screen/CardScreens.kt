@@ -1,5 +1,7 @@
 package com.pdh.cardvault.ui.screen
 
+import androidx.activity.compose.BackHandler
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -15,11 +17,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -31,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,7 +43,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -46,8 +50,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
@@ -61,7 +68,13 @@ import com.pdh.cardvault.presentation.RevealedCardSecretsUiState
 import com.pdh.cardvault.presentation.VaultFolderUiModel
 import com.pdh.cardvault.ui.card.CardWalletStack
 import com.pdh.cardvault.ui.card.FlippableMaskedCardDetail
+import com.pdh.cardvault.ui.card.MixedWalletStack
+import com.pdh.cardvault.ui.card.WalletStackEntry
+import com.pdh.cardvault.ui.card.orderedWalletEntries
+import com.pdh.cardvault.ui.card.CardTemplatePreview
+import com.pdh.cardvault.ui.card.CardTemplateRegistry
 import java.util.UUID
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,6 +82,9 @@ fun CardListScreen(
     cards: List<CardListItemUiModel>,
     folders: List<VaultFolderUiModel>,
     folderOrder: List<UUID?>,
+    walletOrder: List<String>,
+    selectedFolderId: UUID?,
+    lastFourSearchQuery: String,
     sortingInProgress: Boolean,
     operationMessage: CardOperationMessage,
     onBackToHome: () -> Unit,
@@ -76,27 +92,36 @@ fun CardListScreen(
     onOpenSettings: () -> Unit,
     onOpenTemplates: () -> Unit,
     onCardSelected: (UUID) -> Unit,
+    onFolderSelected: (UUID?) -> Unit,
+    onLastFourSearchQueryChanged: (String) -> Unit,
     onCardsReordered: (List<UUID>) -> Unit,
     onFoldersReordered: (List<UUID?>) -> Unit,
+    onWalletEntriesReordered: (List<String>) -> Unit,
     onCreateFolder: (String) -> Unit,
     onRenameFolder: (UUID, String) -> Unit,
+    onSetFolderColor: (UUID, Int) -> Unit,
+    onMoveFolder: (UUID, UUID?) -> Unit,
     onDeleteFolder: (UUID) -> Unit,
     onMoveCardToFolder: (UUID, UUID?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var selectedFolderId by remember { mutableStateOf<UUID?>(null) }
-    val folderTargets = remember { mutableMapOf<UUID?, Rect>() }
-    LaunchedEffect(folders) {
-        if (selectedFolderId != null && folders.none { it.id == selectedFolderId }) {
-            selectedFolderId = null
-        }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val visibleCards = visibleCardsForWallet(cards, selectedFolderId, lastFourSearchQuery)
+    val children = folders.filter { it.parentFolderId == selectedFolderId }
+    val entries = orderedWalletEntries(walletOrder,
+        children.map { WalletStackEntry(it.id, true) } + visibleCards.map { WalletStackEntry(it.id, false) })
+    val goBack = {
+        if (selectedFolderId != null) onFolderSelected(parentFolderForBack(folders, selectedFolderId))
+        else onBackToHome()
     }
-    val visibleCards = cards.filter { it.folderId == selectedFolderId }
+    BackHandler(enabled = selectedFolderId != null) { goBack() }
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
     ) { contentPadding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding),
@@ -107,7 +132,7 @@ fun CardListScreen(
                 WalletHeader(
                     cardCount = cards.size,
                     sortingInProgress = sortingInProgress,
-                    onBackToHome = onBackToHome,
+                    onBackToHome = goBack,
                     onAddCard = onAddCard,
                     onOpenTemplates = onOpenTemplates,
                     onOpenSettings = onOpenSettings,
@@ -120,30 +145,101 @@ fun CardListScreen(
                 }
             }
 
-            item(key = "folder-shelf") {
-                VaultFolderShelf(
-                    folders = folders,
-                    unfiledCount = cards.count { it.folderId == null },
-                    folderOrder = folderOrder,
-                    selectedFolderId = selectedFolderId,
-                    onSelect = { selectedFolderId = it },
-                    onCreate = onCreateFolder,
-                    onRename = onRenameFolder,
-                    onDelete = onDeleteFolder,
-                    onReorder = onFoldersReordered,
-                    onTargetBoundsChanged = { id, bounds -> folderTargets[id] = bounds },
+            item(key = "last-four-search") {
+                OutlinedTextField(
+                    value = lastFourSearchQuery,
+                    onValueChange = { value ->
+                        onLastFourSearchQueryChanged(value)
+                        scope.launch { listState.scrollToItem(0) }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.card_search_last_four)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                        imeAction = ImeAction.Search,
+                    ),
+                    trailingIcon = {
+                        if (lastFourSearchQuery.isNotEmpty()) {
+                            TextButton(onClick = {
+                                onLastFourSearchQueryChanged("")
+                                scope.launch { listState.scrollToItem(0) }
+                            }) {
+                                Text(stringResource(R.string.card_search_clear))
+                            }
+                        }
+                    },
+                    supportingText = if (lastFourSearchQuery.isNotEmpty()) {
+                        { Text(stringResource(R.string.card_search_all_folders)) }
+                    } else null,
                 )
             }
 
-            if (visibleCards.isEmpty()) {
+            item(key = "wallet-folder-actions") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(onClick = goBack, enabled = selectedFolderId != null,
+                        modifier = Modifier.weight(1f)) {
+                        Text(if (selectedFolderId == null) "全部分类" else "‹ ${folderPath(folders, selectedFolderId)}", maxLines = 1)
+                    }
+                    NewWalletFolderButton(onCreateFolder)
+                }
+                Text("拖动排序；在文件夹上停稳，显示「松手移入」后松手归档",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            if (lastFourSearchQuery.isEmpty() && entries.isNotEmpty()) {
+                item(key = "mixed-wallet-stack-$selectedFolderId") {
+                    MixedWalletStack(
+                        entries = entries, enabled = !sortingInProgress,
+                        recordOpenLabel = stringResource(R.string.action_open_card_detail),
+                        onOpen = { entry ->
+                            if (entry.isFolder) {
+                                onFolderSelected(entry.id)
+                                scope.launch { listState.scrollToItem(0) }
+                            } else onCardSelected(entry.id)
+                        },
+                        onReorder = onWalletEntriesReordered,
+                        folderName = { id -> children.firstOrNull { it.id == id }?.name.orEmpty() },
+                        canMoveIntoFolder = { entry, destination -> canDropWalletEntry(entry, destination, folders) },
+                        onMoveIntoFolder = { entry, destination ->
+                            if (entry.isFolder) onMoveFolder(entry.id, destination)
+                            else onMoveCardToFolder(entry.id, destination)
+                        },
+                    ) { entry ->
+                        if (entry.isFolder) {
+                            children.firstOrNull { it.id == entry.id }?.let { folder ->
+                                FolderWalletCard(folder, folders, onRenameFolder, onMoveFolder, onDeleteFolder, onSetFolderColor)
+                            }
+                        } else visibleCards.firstOrNull { it.id == entry.id }?.let { card ->
+                            CardTemplatePreview(CardTemplateRegistry.findOrDefault(card.cardTemplateId),
+                                modifier = Modifier.fillMaxWidth(), nickname = card.nickname,
+                                cardNetwork = card.cardNetwork, shadowElevation = 0.dp)
+                        }
+                    }
+                }
+            } else if (visibleCards.isEmpty()) {
                 item(key = "empty-state") {
-                    EmptyCardState()
+                    if (lastFourSearchQuery.isEmpty()) {
+                        if (folders.any { it.parentFolderId == selectedFolderId }) {
+                            Text("请选择一个子文件夹", modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                        } else EmptyCardState()
+                    } else {
+                        Text(
+                            text = stringResource(R.string.card_search_no_results),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             } else {
                 item(key = "wallet-stack") {
                     CardWalletStack(
                         cards = visibleCards,
                         sortingInProgress = sortingInProgress,
+                        reorderEnabled = lastFourSearchQuery.isEmpty(),
                         openActionLabel = stringResource(R.string.action_open_card_detail),
                         moveUpActionLabel = stringResource(R.string.action_move_up),
                         moveDownActionLabel = stringResource(R.string.action_move_down),
@@ -151,20 +247,21 @@ fun CardListScreen(
                         onCardsReordered = { orderedVisibleIds ->
                             onCardsReordered(mergeVisibleOrder(cards, orderedVisibleIds))
                         },
-                        onCardDropped = { cardId, position ->
-                            val target = folderTargets.entries
-                                .firstOrNull { (_, bounds) -> bounds.contains(position) }
-                            val currentFolder = cards.firstOrNull { it.id == cardId }?.folderId
-                            if (target != null && target.key != currentFolder) {
-                                onMoveCardToFolder(cardId, target.key)
-                                true
-                            } else false
-                        },
                     )
                 }
             }
         }
     }
+}
+
+internal fun visibleCardsForWallet(
+    cards: List<CardListItemUiModel>,
+    selectedFolderId: UUID?,
+    lastFourSearchQuery: String,
+): List<CardListItemUiModel> = if (lastFourSearchQuery.isNotEmpty()) {
+    cards.filter { it.lastFour.endsWith(lastFourSearchQuery) }
+} else {
+    cards.filter { it.folderId == selectedFolderId }
 }
 
 private fun mergeVisibleOrder(
@@ -394,6 +491,10 @@ fun CardDetailScreen(
     onCopyRevealedCardNumber: (UUID) -> Unit,
     onHideCardSecrets: () -> Unit,
     onEdit: (UUID) -> Unit,
+    onCopyAsNew: (UUID) -> Unit,
+    folders: List<VaultFolderUiModel>,
+    currentFolderId: UUID?,
+    onMove: (UUID, UUID?) -> Unit,
     onDeleteConfirmed: (UUID) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -495,6 +596,10 @@ fun CardDetailScreen(
                 onCopyRevealedCardNumber = onCopyRevealedCardNumber,
                 onHideCardSecrets = onHideCardSecrets,
                 onEdit = onEdit,
+                onCopyAsNew = onCopyAsNew,
+                folders = folders,
+                currentFolderId = currentFolderId,
+                onMove = onMove,
                 onDelete = { deleteCandidate = detailState.recordId },
             )
         }
@@ -512,6 +617,10 @@ private fun LoadedCardDetail(
     onCopyRevealedCardNumber: (UUID) -> Unit,
     onHideCardSecrets: () -> Unit,
     onEdit: (UUID) -> Unit,
+    onCopyAsNew: (UUID) -> Unit,
+    folders: List<VaultFolderUiModel>,
+    currentFolderId: UUID?,
+    onMove: (UUID, UUID?) -> Unit,
     onDelete: () -> Unit,
 ) {
     var showCardBack by remember(recordId) { mutableStateOf(false) }
@@ -584,6 +693,17 @@ private fun LoadedCardDetail(
                         Text(stringResource(R.string.action_delete_card))
                     }
                 }
+            }
+        }
+        item(key = "move-card") {
+            RecordMoveButton(folders, currentFolderId, onMove = { destination ->
+                onHideCardSecrets()
+                onMove(recordId, destination)
+            })
+        }
+        item(key = "copy-as-new-card") {
+            OutlinedButton(onClick = { onCopyAsNew(recordId) }, modifier = Modifier.fillMaxWidth()) {
+                Text("以此卡新建")
             }
         }
     }

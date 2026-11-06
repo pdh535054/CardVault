@@ -347,6 +347,8 @@ private class BinaryWriter : AutoCloseable {
                         folder.writeInt(value.payload.schemaVersion)
                         folder.writeByte(value.payload.collection.ordinal)
                         folder.writeUtf8(value.payload.name, MAX_FOLDER_NAME_BYTES)
+                        if (value.payload.schemaVersion >= 2) folder.writeNullableUuid(value.payload.parentFolderId)
+                        if (value.payload.schemaVersion >= 3) folder.writeInt(value.payload.colorRgb)
                         folder.toByteArray()
                     }
                     try {
@@ -561,7 +563,7 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
                     val payload = try {
                         BinaryReader(encoded).use { folder ->
                             val schemaVersion = folder.readInt()
-                            if (schemaVersion != 1) {
+                            if (schemaVersion !in 1..3) {
                                 throw SyncProtocolException(SyncErrorCode.UNSUPPORTED_VERSION)
                             }
                             val collectionOrdinal = folder.readByte()
@@ -571,6 +573,8 @@ private class BinaryReader(encoded: ByteArray) : AutoCloseable {
                                 schemaVersion = schemaVersion,
                                 collection = collection,
                                 name = folder.readUtf8(MAX_FOLDER_NAME_BYTES),
+                                parentFolderId = if (schemaVersion >= 2) folder.readNullableUuid() else null,
+                                colorRgb = if (schemaVersion >= 3) folder.readInt() else com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB,
                             ).also { folder.requireEnd() }
                         }
                     } finally {

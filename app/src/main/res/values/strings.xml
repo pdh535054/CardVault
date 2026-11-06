@@ -66,8 +66,13 @@
     <string name="card_error_device_security_required">设备安全锁屏当前不可用，已拒绝保存或修改。</string>
     <string name="card_expired">已过期</string>
     <string name="card_stack_item_content_description">第 %1$d 张卡，共 %2$d 张；点按打开，长按拖动排序；敏感内容已隐藏</string>
+    <string name="card_stack_search_item_content_description">第 %1$d 张卡，共 %2$d 张；点按打开；敏感内容已隐藏</string>
     <string name="card_wallet_title">卡包</string>
     <string name="card_wallet_card_count">%1$d 张卡片</string>
+    <string name="card_search_last_four">搜索卡号后四位</string>
+    <string name="card_search_clear">清除</string>
+    <string name="card_search_all_folders">正在搜索全部文件夹</string>
+    <string name="card_search_no_results">未找到末四位匹配的卡片</string>
 
     <string name="vault_home_title">选择保险库</string>
     <string name="vault_home_subtitle">银行卡与地址分别整理，统一加密保存在本机</string>

@@ -65,6 +65,8 @@ import com.pdh.cardvault.domain.validation.BankCardValidationError
 import com.pdh.cardvault.domain.validation.ExpiryDateTools
 import com.pdh.cardvault.presentation.CardFormField
 import com.pdh.cardvault.presentation.CardFormUiState
+import com.pdh.cardvault.presentation.VaultFolderUiModel
+import java.util.UUID
 import com.pdh.cardvault.ui.card.CardTemplatePicker
 import com.pdh.cardvault.ui.card.CardTemplatePreview
 import com.pdh.cardvault.ui.card.CardTemplateRegistry
@@ -73,6 +75,8 @@ import com.pdh.cardvault.ui.card.CardTemplateRegistry
 @Composable
 fun AddCardScreen(
     form: CardFormUiState,
+    folders: List<VaultFolderUiModel>,
+    onFolderSelected: (UUID?) -> Unit,
     onFieldChanged: (CardFormField, String) -> Unit,
     onConfirmSaveCvvRisk: () -> Unit,
     onDismissSaveCvvRisk: () -> Unit,
@@ -81,7 +85,7 @@ fun AddCardScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) = BankCardFormScreen(
-    title = stringResource(R.string.add_card_title),
+    title = if (form.isTemplateCopy) "以此卡新建" else stringResource(R.string.add_card_title),
     saveButtonLabel = stringResource(R.string.action_save_card),
     form = form,
     onFieldChanged = onFieldChanged,
@@ -90,6 +94,7 @@ fun AddCardScreen(
     onTemplateSelected = onTemplateSelected,
     onSubmit = onSubmit,
     onBack = onBack,
+    folderPicker = { CardDestinationPicker(folders, form.folderId, !form.submitting, onFolderSelected) },
     modifier = modifier,
 )
 
@@ -130,6 +135,7 @@ private fun BankCardFormScreen(
     onSubmit: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    folderPicker: (@Composable () -> Unit)? = null,
 ) {
     BackHandler {
         if (!form.submitting) onBack()
@@ -294,6 +300,7 @@ private fun BankCardFormScreen(
                             .padding(horizontal = 20.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(20.dp),
                     ) {
+                folderPicker?.invoke()
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.extraLarge,

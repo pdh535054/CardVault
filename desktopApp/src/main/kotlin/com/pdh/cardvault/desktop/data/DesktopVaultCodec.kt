@@ -19,13 +19,18 @@ data class DesktopVaultSnapshot(
     val folders: List<DesktopFolder> = emptyList(),
     val cardFolderOrder: List<String?> = listOf(null),
     val addressFolderOrder: List<String?> = listOf(null),
+    val cardWalletOrder: List<String> = emptyList(),
+    val addressWalletOrder: List<String> = emptyList(),
 ) {
     override fun toString(): String =
         "DesktopVaultSnapshot(cardCount=${cards.size}, addressCount=${addresses.size}, folderCount=${folders.size}, revision=$revision)"
 }
 
 internal object DesktopVaultCodec {
-    private const val VERSION = 5
+    private const val VERSION = 8
+    private const val WALLET_ORDER_VERSION = 7
+    private const val HIERARCHY_VERSION = 6
+    private const val ORDER_VERSION = 5
     private const val FOLDER_VERSION = 4
     private const val ADDRESS_VERSION = 3
     private const val LEGACY_VERSION = 2
@@ -85,9 +90,13 @@ internal object DesktopVaultCodec {
                 data.writeInt(folder.kind.ordinal)
                 data.writeLong(folder.createdAtEpochMillis)
                 data.writeLong(folder.updatedAtEpochMillis)
+                data.writeNullableString(folder.parentFolderId, 64)
+                data.writeInt(folder.colorRgb)
             }
             data.writeFolderOrder(snapshot.cardFolderOrder)
             data.writeFolderOrder(snapshot.addressFolderOrder)
+            data.writeWalletOrder(snapshot.cardWalletOrder)
+            data.writeWalletOrder(snapshot.addressWalletOrder)
         }
         return output.toByteArray().also { bytes ->
             require(bytes.size <= MAX_PAYLOAD_BYTES) { "卡包数据过大。" }
@@ -158,21 +167,25 @@ internal object DesktopVaultCodec {
                                 ?: throw InvalidVaultException(),
                             createdAtEpochMillis = data.readLong(),
                             updatedAtEpochMillis = data.readLong(),
+                            parentFolderId = if (formatVersion >= HIERARCHY_VERSION) data.readNullableString(64) else null,
+                            colorRgb = if (formatVersion >= VERSION) data.readInt() else com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB,
                         )
                     }
                 } else emptyList()
-                val cardFolderOrder = if (formatVersion >= VERSION) {
+                val cardFolderOrder = if (formatVersion >= ORDER_VERSION) {
                     data.readFolderOrder()
                 } else {
                     listOf(null) + folders.filter { it.kind == DesktopFolderKind.CARDS }
                         .sortedBy(DesktopFolder::createdAtEpochMillis).map(DesktopFolder::id)
                 }
-                val addressFolderOrder = if (formatVersion >= VERSION) {
+                val addressFolderOrder = if (formatVersion >= ORDER_VERSION) {
                     data.readFolderOrder()
                 } else {
                     listOf(null) + folders.filter { it.kind == DesktopFolderKind.ADDRESSES }
                         .sortedBy(DesktopFolder::createdAtEpochMillis).map(DesktopFolder::id)
                 }
+                val cardWalletOrder = if (formatVersion >= WALLET_ORDER_VERSION) data.readWalletOrder() else emptyList()
+                val addressWalletOrder = if (formatVersion >= WALLET_ORDER_VERSION) data.readWalletOrder() else emptyList()
                 if (
                     data.available() != 0 ||
                     cards.map(DesktopCard::id).toSet().size != cards.size ||
@@ -212,6 +225,8 @@ internal object DesktopVaultCodec {
                     folders = folders,
                     cardFolderOrder = cardFolderOrder,
                     addressFolderOrder = addressFolderOrder,
+                    cardWalletOrder = cardWalletOrder,
+                    addressWalletOrder = addressWalletOrder,
                 ).also {
                     decodedSyncState = null
                 }
@@ -414,6 +429,17 @@ internal object DesktopVaultCodec {
     private fun DataOutputStream.writeFolderOrder(order: List<String?>) {
         writeInt(order.size)
         order.forEach { writeNullableString(it, 64) }
+    }
+
+    private fun DataOutputStream.writeWalletOrder(order: List<String>) {
+        require(order.size <= MAX_FOLDERS + MAX_CARDS && order.distinct().size == order.size)
+        writeInt(order.size)
+        order.forEach { writeString(it, 64) }
+    }
+
+    private fun DataInputStream.readWalletOrder(): List<String> {
+        val count = readInt().takeIf { it in 0..MAX_FOLDERS + MAX_CARDS } ?: throw InvalidVaultException()
+        return List(count) { readString(64) }.also { if (it.distinct().size != it.size) throw InvalidVaultException() }
     }
 
     private fun DataInputStream.readFolderOrder(): List<String?> {

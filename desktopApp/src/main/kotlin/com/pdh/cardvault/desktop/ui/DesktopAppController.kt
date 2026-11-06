@@ -43,6 +43,8 @@ data class CardDraft(
     val cvv: String = "",
     val notes: String = "",
     val style: CardCoverStyle = CardCoverStyle.Default,
+    val folderId: String? = null,
+    val isTemplateCopy: Boolean = false,
 ) {
     override fun toString(): String = "CardDraft(id=$id, sensitiveFields=redacted)"
 }
@@ -107,6 +109,10 @@ class DesktopAppController(
         private set
     var addressFolderOrder by mutableStateOf(repository.folderOrder(DesktopFolderKind.ADDRESSES))
         private set
+    var cardWalletOrder by mutableStateOf(repository.walletOrder(DesktopFolderKind.CARDS))
+        private set
+    var addressWalletOrder by mutableStateOf(repository.walletOrder(DesktopFolderKind.ADDRESSES))
+        private set
     var selectedCardFolderId by mutableStateOf<String?>(null)
         private set
     var selectedAddressFolderId by mutableStateOf<String?>(null)
@@ -167,8 +173,12 @@ class DesktopAppController(
     fun selectCardFolder(id: String?) { selectedCardFolderId = id }
     fun selectAddressFolder(id: String?) { selectedAddressFolderId = id }
 
-    fun createFolder(name: String, kind: DesktopFolderKind): Boolean = runCatching {
-        repository.createFolder(name, kind)
+    fun reorderWalletEntries(kind: DesktopFolderKind, visibleKeys: List<String>): Boolean = runCatching {
+        repository.reorderWalletEntries(kind, visibleKeys).also { refreshFolders() }
+    }.onFailure { notice = "无法调整显示顺序" }.getOrDefault(false)
+
+    fun createFolder(name: String, kind: DesktopFolderKind, parentFolderId: String? = null): Boolean = runCatching {
+        repository.createFolder(name, kind, parentFolderId)
         refreshFolders()
         true
     }.onFailure { notice = it.message ?: "无法创建文件夹" }.getOrDefault(false)
@@ -179,11 +189,19 @@ class DesktopAppController(
         changed
     }.onFailure { notice = it.message ?: "无法重命名文件夹" }.getOrDefault(false)
 
+    fun moveFolder(id: String, parentFolderId: String?): Boolean = runCatching {
+        repository.moveFolder(id, parentFolderId).also { if (it) refreshFolders() }
+    }.onFailure { notice = it.message ?: "无法移动文件夹" }.getOrDefault(false)
+
+    fun setFolderColor(id: String, colorRgb: Int): Boolean = runCatching {
+        repository.setFolderColor(id, colorRgb).also { if (it) refreshFolders() }
+    }.onFailure { notice = "无法修改文件夹颜色" }.getOrDefault(false)
+
     fun deleteFolder(id: String): Boolean {
         val changed = repository.deleteFolder(id)
         if (changed) {
-            if (selectedCardFolderId == id) selectedCardFolderId = null
-            if (selectedAddressFolderId == id) selectedAddressFolderId = null
+            if (selectedCardFolderId == id) selectedCardFolderId = cardFolders.firstOrNull { it.id == id }?.parentFolderId
+            if (selectedAddressFolderId == id) selectedAddressFolderId = addressFolders.firstOrNull { it.id == id }?.parentFolderId
             refreshCards()
             refreshAddresses()
             refreshFolders()
@@ -191,11 +209,26 @@ class DesktopAppController(
         return changed
     }
 
-    fun moveCardToFolder(cardId: String, folderId: String?): Boolean =
-        repository.moveCardToFolder(cardId, folderId).also { if (it) refreshCards() }
+    fun moveCardToFolder(cardId: String, folderId: String?): Boolean {
+        if (authenticatingAction != null || cards.none { it.id == cardId } ||
+            (folderId != null && cardFolders.none { it.id == folderId })) return false
+        concealSensitiveInformation()
+        return runCatching {
+            repository.moveCardToFolder(cardId, folderId).also {
+                if (it) { refreshCards(); refreshFolders(); notice = "已移动卡片" }
+            }
+        }.onFailure { notice = "移动未能完成，请检查所在位置后重试" }.getOrDefault(false)
+    }
 
-    fun moveAddressToFolder(addressId: String, folderId: String?): Boolean =
-        repository.moveAddressToFolder(addressId, folderId).also { if (it) refreshAddresses() }
+    fun moveAddressToFolder(addressId: String, folderId: String?): Boolean {
+        if (authenticatingAction != null || addresses.none { it.id == addressId } ||
+            (folderId != null && addressFolders.none { it.id == folderId })) return false
+        return runCatching {
+            repository.moveAddressToFolder(addressId, folderId).also {
+                if (it) { refreshAddresses(); refreshFolders(); notice = "已移动卡片" }
+            }
+        }.onFailure { notice = "移动未能完成，请检查所在位置后重试" }.getOrDefault(false)
+    }
 
     fun reorderFolders(kind: DesktopFolderKind, orderedIds: List<String?>): Boolean =
         repository.reorderFolders(kind, orderedIds).also { changed ->
@@ -204,9 +237,25 @@ class DesktopAppController(
 
     fun startAdd() {
         revealedCardId = null
-        editingDraft = CardDraft()
+        editingDraft = CardDraft(folderId = selectedCardFolderId)
         draftErrors = DraftErrors()
         section = DesktopSection.Editor
+    }
+
+    fun startCopy(cardId: String): Boolean {
+        if (authenticatingAction != null) return false
+        val source = cards.firstOrNull { it.id == cardId } ?: return false
+        concealSensitiveInformation()
+        editingDraft = CardDraft(nickname = source.nickname, issuerName = source.issuerName,
+            notes = source.notes, style = source.style, folderId = source.folderId, isTemplateCopy = true)
+        draftErrors = DraftErrors()
+        section = DesktopSection.Editor
+        return true
+    }
+
+    fun selectDraftFolder(folderId: String?) {
+        if (folderId != null && cardFolders.none { it.id == folderId }) return
+        updateDraft { it.copy(folderId = folderId) }
     }
 
     fun startAddAddress() {
@@ -258,6 +307,7 @@ class DesktopAppController(
             cvv = card.cvv.orEmpty(),
             notes = card.notes,
             style = card.style,
+            folderId = card.folderId,
         )
         draftErrors = DraftErrors()
         section = DesktopSection.Editor
@@ -270,6 +320,10 @@ class DesktopAppController(
 
     fun saveDraft(): Boolean {
         val draft = editingDraft
+        if (draft.folderId != null && cardFolders.none { it.id == draft.folderId }) {
+            notice = "目标文件夹已不存在，请重新选择"
+            return false
+        }
         val normalizedNumber = DesktopCard.normalizeCardNumber(draft.cardNumber)
         val errors = DraftErrors(
             nickname = if (draft.nickname.trim().codePointCount(0, draft.nickname.trim().length) !in 1..50) {
@@ -301,7 +355,7 @@ class DesktopAppController(
                 style = draft.style,
                 sortOrder = 0,
                 clock = clock,
-            )
+            ).copy(folderId = draft.folderId)
         } else {
             existing.copy(
                 nickname = draft.nickname.trim(),
@@ -318,6 +372,8 @@ class DesktopAppController(
 
         if (existing == null) repository.add(card) else repository.update(card)
         refreshCards()
+        refreshFolders()
+        selectedCardFolderId = card.folderId
         selectedId = card.id
         editingDraft = CardDraft()
         section = DesktopSection.Wallet
@@ -770,6 +826,10 @@ class DesktopAppController(
         addressFolders = repository.folders(DesktopFolderKind.ADDRESSES)
         cardFolderOrder = repository.folderOrder(DesktopFolderKind.CARDS)
         addressFolderOrder = repository.folderOrder(DesktopFolderKind.ADDRESSES)
+        cardWalletOrder = repository.walletOrder(DesktopFolderKind.CARDS)
+        addressWalletOrder = repository.walletOrder(DesktopFolderKind.ADDRESSES)
+        if (selectedCardFolderId != null && cardFolders.none { it.id == selectedCardFolderId }) selectedCardFolderId = null
+        if (selectedAddressFolderId != null && addressFolders.none { it.id == selectedAddressFolderId }) selectedAddressFolderId = null
     }
 
     private fun refreshSyncStatus() {

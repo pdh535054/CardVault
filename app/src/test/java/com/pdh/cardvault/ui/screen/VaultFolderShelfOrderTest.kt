@@ -6,6 +6,21 @@ import org.junit.Test
 
 class VaultFolderShelfOrderTest {
     @Test
+    fun reorderingChildrenKeepsOtherLevelsInPlace() {
+        val root = UUID.randomUUID()
+        val firstChild = UUID.randomUUID()
+        val otherRoot = UUID.randomUUID()
+        val secondChild = UUID.randomUUID()
+        assertEquals(
+            listOf<UUID?>(null, root, secondChild, otherRoot, firstChild),
+            mergeFolderShelfOrder(
+                listOf(null, root, firstChild, otherRoot, secondChild),
+                listOf(secondChild, firstChild),
+            ),
+        )
+    }
+
+    @Test
     fun unfiledEntryCanMoveBetweenCustomFolders() {
         val first = UUID.randomUUID()
         val second = UUID.randomUUID()

@@ -4,6 +4,7 @@ import com.pdh.cardvault.desktop.model.CardCoverStyle
 import com.pdh.cardvault.desktop.model.DesktopCard
 import com.pdh.cardvault.desktop.model.DesktopAddress
 import com.pdh.cardvault.desktop.model.DesktopFolderKind
+import com.pdh.cardvault.desktop.model.DesktopFolder
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.nio.charset.StandardCharsets
@@ -19,6 +20,135 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class EncryptedDesktopVaultTest {
+    @Test fun `moving whole folders retains descendants cards addresses and colors after reopening`() {
+        for (kind in DesktopFolderKind.entries) {
+            val directory = Files.createTempDirectory("cardvault-subtree-move")
+            val repository = DesktopCardRepository(EncryptedDesktopVault(directory, XorTestProtector()), fixedClock)
+            val source = repository.createFolder("Synthetic source", kind)
+            val child = repository.createFolder("Synthetic child", kind, source.id)
+            val target = repository.createFolder("Synthetic target", kind)
+            repository.setFolderColor(source.id, 0x27AE93)
+            val card = syntheticCard()
+            repository.add(card)
+            val address = syntheticAddress()
+            repository.addAddress(address)
+            if (kind == DesktopFolderKind.CARDS) repository.moveCardToFolder(card.id, child.id)
+            else repository.moveAddressToFolder(address.id, child.id)
+            val cards = repository.cards()
+            val addresses = repository.addresses()
+            assertTrue(repository.moveFolder(source.id, target.id))
+            assertFailsWith<IllegalArgumentException> { repository.moveFolder(source.id, source.id) }
+            assertFailsWith<IllegalArgumentException> { repository.moveFolder(target.id, child.id) }
+            repository.close()
+            val reopened = DesktopCardRepository(EncryptedDesktopVault(directory, XorTestProtector()), fixedClock)
+            val folders = reopened.folders(kind)
+            assertEquals(target.id, folders.first { it.id == source.id }.parentFolderId)
+            assertEquals(source.id, folders.first { it.id == child.id }.parentFolderId)
+            assertEquals(0x27AE93, folders.first { it.id == source.id }.colorRgb)
+            assertEquals(cards, reopened.cards())
+            assertEquals(addresses, reopened.addresses())
+            reopened.close()
+        }
+    }
+    @Test fun `version six hierarchy upgrades without losing parent links`() {
+        val parent = DesktopFolder.create("Synthetic parent", DesktopFolderKind.CARDS, fixedClock)
+        val child = DesktopFolder.create("Synthetic child", DesktopFolderKind.CARDS, fixedClock, parent.id)
+        val legacy = legacyFolderSnapshot(6, listOf(parent, child))
+        val restored = DesktopVaultCodec.decode(legacy)
+        assertEquals(parent.id, restored.folders.single { it.id == child.id }.parentFolderId)
+        assertTrue(restored.cardWalletOrder.isEmpty())
+        assertEquals(com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB, restored.folders.last().colorRgb)
+    }
+
+    @Test fun `version seven folders and mixed order upgrade with default colors`() {
+        val parent = DesktopFolder.create("Synthetic parent", DesktopFolderKind.CARDS, fixedClock)
+        val child = DesktopFolder.create("Synthetic child", DesktopFolderKind.CARDS, fixedClock, parent.id)
+        val restored = DesktopVaultCodec.decode(legacyFolderSnapshot(7, listOf(parent, child)))
+        assertEquals(listOf("f:${child.id}", "f:${parent.id}"), restored.cardWalletOrder)
+        assertEquals(parent.id, restored.folders.last().parentFolderId)
+        assertTrue(restored.folders.all { it.colorRgb == com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB })
+    }
+
+    @Test fun `custom folder color persists after reopening`() {
+        val directory = Files.createTempDirectory("cardvault-folder-color")
+        val repository = DesktopCardRepository(EncryptedDesktopVault(directory, XorTestProtector()), fixedClock)
+        val folder = repository.createFolder("Synthetic colored folder", DesktopFolderKind.CARDS)
+        assertTrue(repository.setFolderColor(folder.id, 0xF4D078))
+        assertFailsWith<IllegalArgumentException> { repository.setFolderColor(folder.id, -1) }
+        repository.close()
+        val reopened = DesktopCardRepository(EncryptedDesktopVault(directory, XorTestProtector()), fixedClock)
+        assertEquals(0xF4D078, reopened.folders(DesktopFolderKind.CARDS).single().colorRgb)
+        reopened.close()
+    }
+
+    private fun legacyFolderSnapshot(version: Int, folders: List<DesktopFolder>): ByteArray {
+        val empty = DesktopVaultCodec.encode(DesktopVaultSnapshot(emptyList(), 1))
+        // Empty trailing folder count (4), two root-only folder orders (10), two empty wallet orders (8).
+        val prefix = empty.copyOf(empty.size - 22)
+        val versionOffset = 1 + "CardVault/DesktopSnapshot".toByteArray(StandardCharsets.US_ASCII).size
+        prefix[versionOffset + 3] = version.toByte()
+        val bytes = ByteArrayOutputStream()
+        bytes.write(prefix)
+        DataOutputStream(bytes).use { data ->
+            data.writeInt(folders.size)
+            folders.forEach { folder ->
+                data.writeLegacyString(folder.id)
+                data.writeLegacyString(folder.name)
+                data.writeInt(folder.kind.ordinal)
+                data.writeLong(folder.createdAtEpochMillis)
+                data.writeLong(folder.updatedAtEpochMillis)
+                data.writeBoolean(folder.parentFolderId != null)
+                folder.parentFolderId?.let { data.writeLegacyString(it) }
+            }
+            data.writeInt(folders.size + 1)
+            data.writeBoolean(false)
+            folders.forEach { data.writeBoolean(true); data.writeLegacyString(it.id) }
+            data.writeInt(1)
+            data.writeBoolean(false)
+            if (version >= 7) {
+                data.writeInt(folders.size)
+                folders.asReversed().forEach { data.writeLegacyString("f:${it.id}") }
+                data.writeInt(0)
+            }
+        }
+        return bytes.toByteArray()
+    }
+
+    @Test fun `mixed wallet order survives reopening`() {
+        val directory = Files.createTempDirectory("cardvault-mixed-wallet")
+        val repository = DesktopCardRepository(EncryptedDesktopVault(directory, XorTestProtector()), fixedClock)
+        val folder = repository.createFolder("Synthetic folder", DesktopFolderKind.CARDS)
+        val card = syntheticCard()
+        repository.add(card)
+        val order = listOf("r:${card.id}", "f:${folder.id}")
+        repository.reorderWalletEntries(DesktopFolderKind.CARDS, order)
+        repository.close()
+        val reopened = DesktopCardRepository(EncryptedDesktopVault(directory, XorTestProtector()), fixedClock)
+        assertEquals(order, reopened.walletOrder(DesktopFolderKind.CARDS))
+        assertEquals(card.id, reopened.cards().single().id)
+        reopened.close()
+    }
+
+    @Test
+    fun `nested folders persist and deleting parent preserves child`() {
+        val directory = Files.createTempDirectory("cardvault-nested-folders")
+        val repository = DesktopCardRepository(EncryptedDesktopVault(directory, XorTestProtector()), fixedClock)
+        val parent = repository.createFolder("Synthetic parent", DesktopFolderKind.CARDS)
+        val child = repository.createFolder("Synthetic child", DesktopFolderKind.CARDS, parent.id)
+        val grandchild = repository.createFolder("Synthetic grandchild", DesktopFolderKind.CARDS, child.id)
+        assertFailsWith<IllegalArgumentException> { repository.moveFolder(parent.id, grandchild.id) }
+        assertTrue(repository.moveFolder(grandchild.id, parent.id))
+        assertTrue(repository.moveFolder(grandchild.id, child.id))
+        assertEquals(parent.id, repository.folders(DesktopFolderKind.CARDS).first { it.id == child.id }.parentFolderId)
+        assertTrue(repository.deleteFolder(child.id))
+        assertEquals(parent.id, repository.folders(DesktopFolderKind.CARDS).first { it.id == grandchild.id }.parentFolderId)
+        repository.close()
+
+        val reopened = DesktopCardRepository(EncryptedDesktopVault(directory, XorTestProtector()), fixedClock)
+        assertEquals(parent.id, reopened.folders(DesktopFolderKind.CARDS).first { it.id == grandchild.id }.parentFolderId)
+        reopened.close()
+    }
+
     @Test
     fun `opening an empty vault verifies and persists the protected local key`() {
         val directory = Files.createTempDirectory("cardvault-empty-key")
@@ -241,12 +371,13 @@ class EncryptedDesktopVaultTest {
                 addressRecordVectors = mapOf(address.id to VersionVector(mapOf(initial.deviceId to 1L))),
             )
         }
-        val versionFive = DesktopVaultCodec.encode(
+        val current = DesktopVaultCodec.encode(
             DesktopVaultSnapshot(listOf(card), 9L, state, listOf(address)),
         )
         val versionOffset = 1 + "CardVault/DesktopSnapshot".toByteArray(StandardCharsets.US_ASCII).size
-        versionFive[versionOffset + 3] = 4
-        val versionFour = versionFive.copyOf(versionFive.size - 10)
+        current[versionOffset + 3] = 4
+        // v5 adds two one-entry folder orders (10 bytes); v7 adds two empty mixed orders (8 bytes).
+        val versionFour = current.copyOf(current.size - 18)
 
         val restored = DesktopVaultCodec.decode(versionFour)
 

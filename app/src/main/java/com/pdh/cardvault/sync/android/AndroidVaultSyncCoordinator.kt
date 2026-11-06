@@ -872,6 +872,8 @@ internal class AndroidVaultSyncCoordinator(
             VaultFolderCollection.ADDRESSES -> FolderCollectionKind.ADDRESSES
         },
         name = name,
+        parentFolderId = parentFolderId?.toString(),
+        colorRgb = colorRgb,
     )
 
     private fun FolderSyncPayload.toLocalPayload(): VaultFolderPayload = VaultFolderPayload(
@@ -880,6 +882,8 @@ internal class AndroidVaultSyncCoordinator(
             FolderCollectionKind.ADDRESSES -> VaultFolderCollection.ADDRESSES
         },
         name = name,
+        parentFolderId = parentFolderId?.let(UUID::fromString),
+        colorRgb = colorRgb,
     )
 
     private fun SyncSnapshot.toSummary(

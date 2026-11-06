@@ -72,9 +72,13 @@ fun CardVaultNavHost(
     onCopyAddress: (UUID, AddressCopyPart) -> Unit,
     onDeleteAddress: (UUID) -> Unit,
     onAddressesReordered: (List<UUID>) -> Unit,
+    onAddressFolderSelected: (UUID?) -> Unit,
     onAddressFoldersReordered: (List<UUID?>) -> Unit,
-    onCreateAddressFolder: (String) -> Unit,
+    onAddressWalletReordered: (List<String>) -> Unit,
+    onCreateAddressFolder: (String, UUID?) -> Unit,
     onRenameAddressFolder: (UUID, String) -> Unit,
+    onSetAddressFolderColor: (UUID, Int) -> Unit,
+    onMoveAddressFolder: (UUID, UUID?) -> Unit,
     onDeleteAddressFolder: (UUID) -> Unit,
     onMoveAddressToFolder: (UUID, UUID?) -> Unit,
     onLoadAddressEdit: (String?) -> Unit,
@@ -84,6 +88,8 @@ fun CardVaultNavHost(
     onClearAddressEditDraft: () -> Unit,
     onAddressNavigationEventHandled: (AddressNavigationEvent) -> Unit,
     onCardFormFieldChanged: (CardFormField, String) -> Unit,
+    onCardFormFolderSelected: (UUID?) -> Unit,
+    onCreateFromCard: (UUID) -> Unit,
     onConfirmSaveCvvRisk: () -> Unit,
     onDismissSaveCvvRisk: () -> Unit,
     onTemplateSelected: (String) -> Unit,
@@ -92,9 +98,14 @@ fun CardVaultNavHost(
     onLoadCardDetail: (String?) -> Unit,
     onClearCardDetail: () -> Unit,
     onCardsReordered: (List<UUID>) -> Unit,
+    onCardFolderSelected: (UUID?) -> Unit,
+    onCardLastFourSearchQueryChanged: (String) -> Unit,
     onCardFoldersReordered: (List<UUID?>) -> Unit,
+    onCardWalletReordered: (List<String>) -> Unit,
     onCreateCardFolder: (String) -> Unit,
     onRenameCardFolder: (UUID, String) -> Unit,
+    onSetCardFolderColor: (UUID, Int) -> Unit,
+    onMoveCardFolder: (UUID, UUID?) -> Unit,
     onDeleteCardFolder: (UUID) -> Unit,
     onMoveCardToFolder: (UUID, UUID?) -> Unit,
     onRequestCardAuthentication: (AuthenticationAction, UUID) -> Unit,
@@ -119,6 +130,10 @@ fun CardVaultNavHost(
     LaunchedEffect(navigationEvent) {
         val event = navigationEvent ?: return@LaunchedEffect
         when (event) {
+            CardNavigationEvent.CopyReady -> navController.navigate(CardVaultDestination.AddCard.route) {
+                popUpTo(CardVaultDestination.Cards.route) { inclusive = false }
+                launchSingleTop = true
+            }
             CardNavigationEvent.AddSaved -> navController.popBackStack()
             is CardNavigationEvent.EditReady -> {
                 navController.navigate(CardVaultDestination.editCardRoute(event.recordId)) {
@@ -216,6 +231,9 @@ fun CardVaultNavHost(
                 cards = cardsUiState.cards,
                 folders = cardsUiState.folders,
                 folderOrder = cardsUiState.folderOrder,
+                walletOrder = cardsUiState.walletOrder,
+                selectedFolderId = cardsUiState.selectedFolderId,
+                lastFourSearchQuery = cardsUiState.lastFourSearchQuery,
                 sortingInProgress = cardsUiState.sortingInProgress,
                 operationMessage = cardsUiState.operationMessage,
                 onBackToHome = navController::popBackStack,
@@ -231,12 +249,17 @@ fun CardVaultNavHost(
                 onCardSelected = { recordId ->
                     navController.navigate(CardVaultDestination.cardDetailRoute(recordId))
                 },
+                onFolderSelected = onCardFolderSelected,
+                onLastFourSearchQueryChanged = onCardLastFourSearchQueryChanged,
                 onCardsReordered = onCardsReordered,
                 onFoldersReordered = onCardFoldersReordered,
+                onWalletEntriesReordered = onCardWalletReordered,
                 onCreateFolder = onCreateCardFolder,
                 onRenameFolder = onRenameCardFolder,
-                onDeleteFolder = onDeleteCardFolder,
+                onSetFolderColor = onSetCardFolderColor,
+                onMoveFolder = onMoveCardFolder,
                 onMoveCardToFolder = onMoveCardToFolder,
+                onDeleteFolder = onDeleteCardFolder,
             )
         }
         composable(CardVaultDestination.AddCard.route) {
@@ -247,6 +270,8 @@ fun CardVaultNavHost(
             }
             AddCardScreen(
                 form = cardsUiState.form,
+                folders = cardsUiState.folders,
+                onFolderSelected = onCardFormFolderSelected,
                 onFieldChanged = onCardFormFieldChanged,
                 onConfirmSaveCvvRisk = onConfirmSaveCvvRisk,
                 onDismissSaveCvvRisk = onDismissSaveCvvRisk,
@@ -289,6 +314,10 @@ fun CardVaultNavHost(
                 onEdit = { id ->
                     onRequestCardAuthentication(AuthenticationAction.EditCard, id)
                 },
+                onCopyAsNew = onCreateFromCard,
+                folders = cardsUiState.folders,
+                currentFolderId = cardsUiState.cards.firstOrNull { it.id.toString() == recordId }?.folderId,
+                onMove = onMoveCardToFolder,
                 onDeleteConfirmed = { id ->
                     onRequestCardAuthentication(AuthenticationAction.DeleteCard, id)
                 },
@@ -373,6 +402,8 @@ fun CardVaultNavHost(
                 addresses = addressesUiState.addresses,
                 folders = addressesUiState.folders,
                 folderOrder = addressesUiState.folderOrder,
+                walletOrder = addressesUiState.walletOrder,
+                selectedFolderId = addressesUiState.selectedFolderId,
                 sortingInProgress = addressesUiState.sortingInProgress,
                 operationMessage = addressesUiState.operationMessage,
                 onBack = navController::popBackStack,
@@ -383,11 +414,15 @@ fun CardVaultNavHost(
                     navController.navigate(CardVaultDestination.addressDetailRoute(recordId))
                 },
                 onAddressesReordered = onAddressesReordered,
+                onFolderSelected = onAddressFolderSelected,
                 onFoldersReordered = onAddressFoldersReordered,
+                onWalletEntriesReordered = onAddressWalletReordered,
                 onCreateFolder = onCreateAddressFolder,
                 onRenameFolder = onRenameAddressFolder,
-                onDeleteFolder = onDeleteAddressFolder,
+                onSetFolderColor = onSetAddressFolderColor,
+                onMoveFolder = onMoveAddressFolder,
                 onMoveAddressToFolder = onMoveAddressToFolder,
+                onDeleteFolder = onDeleteAddressFolder,
             )
         }
         composable(CardVaultDestination.AddAddress.route) {
@@ -422,6 +457,9 @@ fun CardVaultNavHost(
             }
             AddressDetailScreen(
                 state = addressesUiState.detail,
+                folders = addressesUiState.folders,
+                currentFolderId = addressesUiState.addresses.firstOrNull { it.id.toString() == recordId }?.folderId,
+                onMove = onMoveAddressToFolder,
                 operationMessage = addressesUiState.operationMessage,
                 onCopy = onCopyAddress,
                 onEdit = { recordId ->

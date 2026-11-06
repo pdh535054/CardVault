@@ -62,6 +62,8 @@ data class CardFormUiState(
     val submitting: Boolean,
     val cvvRiskAcknowledged: Boolean,
     val showCvvRiskConfirmation: Boolean,
+    val folderId: UUID? = null,
+    val isTemplateCopy: Boolean = false,
 ) {
     val expiryDigits: String
         get() = expiryMonth + expiryYear
@@ -81,6 +83,7 @@ data class CardListItemUiModel(
     val issuerName: String,
     val cardTemplateId: String,
     val cardNetwork: CardNetwork?,
+    val lastFour: String,
     val folderId: UUID? = null,
 ) {
     override fun toString(): String = "CardListItemUiModel(sensitiveFields=redacted)"
@@ -90,6 +93,8 @@ data class VaultFolderUiModel(
     val id: UUID,
     val name: String,
     val itemCount: Int,
+    val parentFolderId: UUID? = null,
+    val colorRgb: Int = com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB,
 ) {
     override fun toString(): String = "VaultFolderUiModel(name=redacted, itemCount=$itemCount)"
 }
@@ -182,6 +187,7 @@ enum class CardOperationMessage {
 
 sealed interface CardNavigationEvent {
     data object AddSaved : CardNavigationEvent
+    data object CopyReady : CardNavigationEvent
 
     data class EditReady(val recordId: UUID) : CardNavigationEvent
 
@@ -195,6 +201,9 @@ data class CardsUiState(
     val cards: List<CardListItemUiModel>,
     val folders: List<VaultFolderUiModel> = emptyList(),
     val folderOrder: List<UUID?> = listOf(null),
+    val walletOrder: List<String> = emptyList(),
+    val selectedFolderId: UUID? = null,
+    val lastFourSearchQuery: String = "",
     val form: CardFormUiState,
     val isSorting: Boolean,
     val sortingInProgress: Boolean,
@@ -302,6 +311,7 @@ class CardsViewModel internal constructor(
                 val cards = repository.getList().map(PersistentCardListItem::toUiModel)
                 val folders = loadFolders(cards)
                 val folderOrder = loadFolderOrder()
+                val walletOrder = folderRepository?.getWalletOrder(VaultFolderKind.CARDS).orEmpty()
                 if (!isCurrentEpoch(expectedEpoch)) return@launch
                 _uiState.update { state ->
                     state.copy(
@@ -309,6 +319,7 @@ class CardsViewModel internal constructor(
                         cards = cards,
                         folders = folders,
                         folderOrder = folderOrder,
+                        walletOrder = walletOrder,
                         operationMessage = CardOperationMessage.None,
                     )
                 }
@@ -386,6 +397,7 @@ class CardsViewModel internal constructor(
                 val cards = repository.getList().map(PersistentCardListItem::toUiModel)
                 val folders = loadFolders(cards)
                 val folderOrder = loadFolderOrder()
+                val walletOrder = folderRepository?.getWalletOrder(VaultFolderKind.CARDS).orEmpty()
                 if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
                 clearSensitiveValues()
                 activeDetailRecordId = null
@@ -394,6 +406,10 @@ class CardsViewModel internal constructor(
                         cards = cards,
                         folders = folders,
                         folderOrder = folderOrder,
+                        walletOrder = walletOrder,
+                        selectedFolderId = current.selectedFolderId?.takeIf { id ->
+                            folders.any { folder -> folder.id == id }
+                        },
                         detail = CardDetailUiState.Hidden,
                         edit = CardEditUiState.Hidden,
                         isSorting = false,
@@ -427,6 +443,33 @@ class CardsViewModel internal constructor(
 
     fun selectTemplate(templateId: String) {
         updateAddForm { current -> current.copy(cardTemplateId = templateId) }
+    }
+
+    fun selectAddFolder(folderId: UUID?) {
+        val state = _uiState.value
+        if (folderId != null && state.folders.none { it.id == folderId }) return
+        updateAddForm { it.copy(folderId = folderId) }
+    }
+
+    /** Only copies the already-visible presentation; never reads PAN, expiry or CVV. */
+    fun prepareCardCopy(recordId: UUID): Boolean {
+        val state = _uiState.value
+        val detail = state.detail as? CardDetailUiState.Loaded ?: return false
+        if (state.vaultContentState != VaultContentState.Ready || !repository.isUnlocked() ||
+            detail.recordId != recordId || activeDetailRecordId != recordId ||
+            state.form.submitting || pendingAuthentication != null
+        ) return false
+        val source = state.cards.firstOrNull { it.id == recordId } ?: return false
+        hideRevealedCardSecrets()
+        authorizedOperation = null
+        _uiState.update {
+            it.copy(edit = CardEditUiState.Hidden, form = emptyForm().copy(
+                nickname = detail.card.nickname, issuerName = detail.card.issuerName,
+                cardTemplateId = detail.card.cardTemplateId, notes = detail.card.notes,
+                folderId = source.folderId, isTemplateCopy = true,
+            ), navigationEvent = CardNavigationEvent.CopyReady)
+        }
+        return true
     }
 
     fun submitCard(): Boolean {
@@ -474,10 +517,14 @@ class CardsViewModel internal constructor(
             try {
                 repository.add(validation.normalizedInput)
                 val cards = repository.getList().map(PersistentCardListItem::toUiModel)
+                val folders = loadFolders(cards)
                 if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
                 _uiState.update { current ->
                     current.copy(
                         cards = cards,
+                        folders = folders,
+                        selectedFolderId = form.folderId,
+                        lastFourSearchQuery = "",
                         form = emptyForm(),
                         isSorting = false,
                         operationMessage = CardOperationMessage.None,
@@ -846,8 +893,33 @@ class CardsViewModel internal constructor(
         return persistReorderedCards(original = state.cards, reordered = reordered)
     }
 
-    fun createFolder(name: String): Boolean = runFolderOperation {
-        createFolder(VaultFolderKind.CARDS, name)
+    fun createFolder(name: String): Boolean {
+        val parent = _uiState.value.selectedFolderId
+        return runFolderOperation { createFolder(VaultFolderKind.CARDS, name, parent) }
+    }
+
+    fun reorderWalletEntries(reorderedKeys: List<String>): Boolean {
+        val state = _uiState.value
+        val available = state.folders.map { com.pdh.cardvault.wallet.WalletDisplayOrder.folder(it.id.toString()) } +
+            state.cards.map { com.pdh.cardvault.wallet.WalletDisplayOrder.record(it.id.toString()) }
+        val all = com.pdh.cardvault.wallet.WalletDisplayOrder.normalize(state.walletOrder, available)
+        val merged = runCatching { com.pdh.cardvault.wallet.WalletDisplayOrder.mergeVisible(all, reorderedKeys) }.getOrNull() ?: return false
+        val folders = folderRepository ?: return false
+        if (state.vaultContentState != VaultContentState.Ready || !repository.isUnlocked()) return false
+        val epoch = lifecycleEpoch
+        _uiState.update { it.copy(walletOrder = merged) }
+        folderOrderJob?.cancel()
+        folderOrderJob = workScope.launch {
+            try {
+                folders.reorderWalletEntries(VaultFolderKind.CARDS, merged)
+            } catch (exception: CancellationException) { throw exception
+            } catch (_: Exception) {
+                if (isCurrentReadyEpoch(epoch)) _uiState.update {
+                    it.copy(walletOrder = state.walletOrder, operationMessage = CardOperationMessage.StorageFailed)
+                }
+            }
+        }
+        return true
     }
 
     fun reorderFolders(orderedIds: List<UUID?>): Boolean {
@@ -894,12 +966,26 @@ class CardsViewModel internal constructor(
         if (!renameFolder(folderId, name)) throw IllegalStateException()
     }
 
+    fun setFolderColor(folderId: UUID, colorRgb: Int): Boolean = runFolderOperation {
+        if (!setFolderColor(folderId, colorRgb)) throw IllegalStateException()
+    }
+
+    fun moveFolder(folderId: UUID, parentFolderId: UUID?): Boolean = runFolderOperation {
+        if (!moveFolder(folderId, parentFolderId)) throw IllegalStateException()
+    }
+
     fun deleteFolder(folderId: UUID): Boolean = runFolderOperation {
         if (!deleteFolder(folderId)) throw IllegalStateException()
     }
 
-    fun moveCardToFolder(cardId: UUID, folderId: UUID?): Boolean = runFolderOperation {
-        if (!moveCardToFolder(cardId, folderId)) throw IllegalStateException()
+    fun moveCardToFolder(cardId: UUID, folderId: UUID?): Boolean {
+        val state = _uiState.value
+        val card = state.cards.firstOrNull { it.id == cardId } ?: return false
+        if (card.folderId == folderId || (folderId != null && state.folders.none { it.id == folderId })) return false
+        hideRevealedCardSecrets()
+        return runFolderOperation {
+            if (!moveCardToFolder(cardId, folderId)) throw IllegalStateException()
+        }
     }
 
     fun onNavigationEventHandled(event: CardNavigationEvent) {
@@ -911,6 +997,24 @@ class CardsViewModel internal constructor(
     fun clearOperationMessage() {
         _uiState.update { current ->
             current.copy(operationMessage = CardOperationMessage.None)
+        }
+    }
+
+    fun selectWalletFolder(folderId: UUID?) {
+        _uiState.update { current ->
+            if (current.vaultContentState != VaultContentState.Ready ||
+                (folderId != null && current.folders.none { it.id == folderId })
+            ) current
+            else current.copy(selectedFolderId = folderId, lastFourSearchQuery = "")
+        }
+    }
+
+    fun updateLastFourSearchQuery(value: String) {
+        val digits = value.filter { it in '0'..'9' }.take(4)
+        _uiState.update { current ->
+            if (current.vaultContentState == VaultContentState.Ready) {
+                current.copy(lastFourSearchQuery = digits)
+            } else current
         }
     }
 
@@ -949,9 +1053,18 @@ class CardsViewModel internal constructor(
                 val cards = repository.getList().map(PersistentCardListItem::toUiModel)
                 val refreshedFolders = loadFolders(cards)
                 val refreshedOrder = loadFolderOrder()
+                val walletOrder = folders.getWalletOrder(VaultFolderKind.CARDS)
                 if (!isCurrentReadyEpoch(expectedEpoch)) return@launch
                 _uiState.update {
-                    it.copy(cards = cards, folders = refreshedFolders, folderOrder = refreshedOrder)
+                    it.copy(
+                        cards = cards,
+                        folders = refreshedFolders,
+                        folderOrder = refreshedOrder,
+                        walletOrder = walletOrder,
+                        selectedFolderId = it.selectedFolderId?.takeIf { id ->
+                            refreshedFolders.any { folder -> folder.id == id }
+                        },
+                    )
                 }
             } catch (exception: CancellationException) {
                 throw exception
@@ -964,10 +1077,13 @@ class CardsViewModel internal constructor(
         return true
     }
 
-    private suspend fun loadFolders(cards: List<CardListItemUiModel>): List<VaultFolderUiModel> =
-        folderRepository?.getFolders(VaultFolderKind.CARDS)?.map { folder ->
-            folder.toUiModel(cards.count { it.folderId == folder.id })
-        }.orEmpty()
+    private suspend fun loadFolders(cards: List<CardListItemUiModel>): List<VaultFolderUiModel> {
+        val folders = folderRepository?.getFolders(VaultFolderKind.CARDS).orEmpty()
+        val membership = cards.map(CardListItemUiModel::folderId)
+        return folders.map { folder ->
+            folder.toUiModel(countFolderTreeItems(folders, folder.id, membership))
+        }
+    }
 
     private suspend fun loadFolderOrder(): List<UUID?> =
         folderRepository?.getFolderOrder(VaultFolderKind.CARDS) ?: listOf(null)
@@ -1401,6 +1517,7 @@ private fun CardFormUiState.toInput(): BankCardInput {
         cvv = cvv.takeIf { saveCvv },
         cardTemplateId = cardTemplateId,
         notes = notes,
+        folderId = folderId?.toString(),
     )
 }
 
@@ -1420,6 +1537,7 @@ private fun BankCardInput.toForm(): CardFormUiState = CardFormUiState(
     submitting = false,
     cvvRiskAcknowledged = saveCvv,
     showCvvRiskConfirmation = false,
+    folderId = folderId?.let(UUID::fromString),
 )
 
 private fun PersistentCardListItem.toUiModel(): CardListItemUiModel = CardListItemUiModel(
@@ -1428,11 +1546,27 @@ private fun PersistentCardListItem.toUiModel(): CardListItemUiModel = CardListIt
     issuerName = issuerName,
     cardTemplateId = cardTemplateId,
     cardNetwork = cardNetwork,
+    lastFour = lastFour,
     folderId = folderId,
 )
 
 private fun PersistentVaultFolder.toUiModel(itemCount: Int): VaultFolderUiModel =
-    VaultFolderUiModel(id = id, name = name, itemCount = itemCount)
+    VaultFolderUiModel(id = id, name = name, itemCount = itemCount, parentFolderId = parentFolderId, colorRgb = colorRgb)
+
+internal fun countFolderTreeItems(
+    folders: List<PersistentVaultFolder>,
+    folderId: UUID,
+    itemFolderIds: List<UUID?>,
+): Int {
+    val children = folders.groupBy(PersistentVaultFolder::parentFolderId)
+    val seen = mutableSetOf<UUID>()
+    val pending = ArrayDeque<UUID>().apply { add(folderId) }
+    while (pending.isNotEmpty()) {
+        val current = pending.removeFirst()
+        if (seen.add(current)) children[current].orEmpty().forEach { pending.add(it.id) }
+    }
+    return itemFolderIds.count { it in seen }
+}
 
 private fun PersistentCardDetail.toUiModel(): CardDetailUiModel = CardDetailUiModel(
     nickname = nickname,

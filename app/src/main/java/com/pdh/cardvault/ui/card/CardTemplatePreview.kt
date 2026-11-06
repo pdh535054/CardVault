@@ -82,6 +82,7 @@ fun CardTemplatePreview(
     cardNetwork: CardNetwork? = null,
     shadowElevation: Dp = 6.dp,
     compactLayout: Boolean = false,
+    aspectRatio: Float = CARD_ASPECT_RATIO,
 ) {
     val useCompactLayout = compactLayout || LocalDensity.current.fontScale > 1.3f
     val previewDescription = stringResource(R.string.card_preview_content_description)
@@ -92,7 +93,7 @@ fun CardTemplatePreview(
 
     Surface(
         modifier = modifier
-            .aspectRatio(CARD_ASPECT_RATIO)
+            .aspectRatio(aspectRatio)
             .clearAndSetSemantics {
                 contentDescription = previewDescription
             },
@@ -607,7 +608,7 @@ fun CardTemplatePicker(
 }
 
 @Composable
-private fun CustomCardColorDialog(
+internal fun CustomCardColorDialog(
     title: String,
     initialColor: Color,
     onDismiss: () -> Unit,

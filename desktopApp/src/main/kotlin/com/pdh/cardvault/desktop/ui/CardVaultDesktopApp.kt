@@ -205,8 +205,10 @@ private fun NavItem(symbol: String, label: String, selected: Boolean, onClick: (
 private fun WalletScreen(controller: DesktopAppController, modifier: Modifier) {
     var deleteConfirmation by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val folderBounds = remember { mutableMapOf<String?, Rect>() }
     val visibleCards = controller.cards.filter { it.folderId == controller.selectedCardFolderId }
+    val children = controller.cardFolders.filter { it.parentFolderId == controller.selectedCardFolderId }
+    val entries = orderedDesktopWalletEntries(controller.cardWalletOrder,
+        children.map { DesktopWalletEntry(it.id, true) } + visibleCards.map { DesktopWalletEntry(it.id, false) })
     Row(modifier.fillMaxSize().padding(32.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(470.dp).fillMaxHeight()) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -224,39 +226,41 @@ private fun WalletScreen(controller: DesktopAppController, modifier: Modifier) {
                 }
             }
             Spacer(Modifier.height(28.dp))
-            DesktopFolderBar(
-                folders = controller.cardFolders,
-                folderOrder = controller.cardFolderOrder,
-                selectedId = controller.selectedCardFolderId,
-                unfiledCount = controller.cards.count { it.folderId == null },
-                itemCount = { folderId -> controller.cards.count { it.folderId == folderId } },
-                onSelect = controller::selectCardFolder,
-                onCreate = { controller.createFolder(it, com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS) },
-                onRename = controller::renameFolder,
-                onDelete = controller::deleteFolder,
-                onReorder = { controller.reorderFolders(com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS, it) },
-                onBounds = { id, bounds -> folderBounds[id] = bounds },
-            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                val selectedFolder = controller.cardFolders.firstOrNull { it.id == controller.selectedCardFolderId }
+                TextButton(enabled = selectedFolder != null,
+                    onClick = { controller.selectCardFolder(selectedFolder?.parentFolderId) },
+                    modifier = Modifier.weight(1f)) {
+                    Text(selectedFolder?.let { "‹ ${desktopFolderPath(controller.cardFolders, it.id)}" } ?: "全部分类", maxLines = 1)
+                }
+                DesktopNewFolderButton { name -> controller.createFolder(name, com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS, controller.selectedCardFolderId) }
+            }
             Spacer(Modifier.height(16.dp))
-            if (visibleCards.isEmpty()) {
+            Text("拖动排序；在文件夹上停稳，显示「松手移入」后松手归档", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (entries.isEmpty()) {
                 EmptyWallet(controller)
             } else {
-                WalletStack(
-                    cards = visibleCards,
-                    selectedId = controller.selectedId,
-                    onSelect = controller::selectCard,
-                    onMove = { id, target ->
-                        visibleCards.getOrNull(target)?.id?.let { targetId ->
-                            controller.moveCard(id, controller.cards.indexOfFirst { it.id == targetId })
-                        }
-                    },
-                    onDrop = { cardId, position ->
-                        val target = folderBounds.entries.firstOrNull { (_, bounds) -> bounds.contains(position) }
-                        val current = controller.cards.firstOrNull { it.id == cardId }?.folderId
-                        target != null && target.key != current && controller.moveCardToFolder(cardId, target.key)
+                DesktopMixedWalletStack(
+                    entries = entries,
+                    onOpen = { if (it.isFolder) controller.selectCardFolder(it.id) else controller.selectCard(it.id) },
+                    onReorder = { controller.reorderWalletEntries(com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS, it) },
+                    folderName = { id -> children.firstOrNull { it.id == id }?.name.orEmpty() },
+                    canMoveIntoFolder = { entry, destination -> canDropDesktopWalletEntry(entry, destination, controller.cardFolders) },
+                    onMoveIntoFolder = { entry, folder ->
+                        if (entry.isFolder) controller.moveFolder(entry.id, folder)
+                        else controller.moveCardToFolder(entry.id, folder)
                     },
                     modifier = Modifier.fillMaxSize(),
-                )
+                ) { entry ->
+                    if (entry.isFolder) children.firstOrNull { it.id == entry.id }?.let { folder ->
+                        DesktopFolderWalletCard(folder, controller.cardFolders,
+                            countDesktopFolderTreeItems(controller.cardFolders, folder.id, controller.cards.map { it.folderId }),
+                            controller::renameFolder, controller::moveFolder, controller::deleteFolder, controller::setFolderColor)
+                    } else visibleCards.firstOrNull { it.id == entry.id }?.let { card ->
+                        CardFace(card, compact = true, modifier = Modifier.fillMaxWidth())
+                    }
+                }
             }
         }
 
@@ -270,6 +274,12 @@ private fun WalletScreen(controller: DesktopAppController, modifier: Modifier) {
                     concealmentEpoch = controller.concealmentEpoch,
                     authenticating = controller.authenticatingAction != null,
                     onEdit = { scope.launch { controller.startEdit(card.id) } },
+                    onCopyAsNew = { controller.startCopy(card.id) },
+                    moveControl = {
+                        DesktopRecordMoveButton(controller.cardFolders, card.folderId,
+                            enabled = controller.authenticatingAction == null,
+                            onMove = { controller.moveCardToFolder(card.id, it) })
+                    },
                     onDelete = { deleteConfirmation = true },
                     onAuthorizeReveal = { controller.authorizeReveal(card.id) },
                     onConceal = { controller.concealCard(card.id) },
@@ -371,6 +381,8 @@ private fun CardDetailPanel(
     concealmentEpoch: Long,
     authenticating: Boolean,
     onEdit: () -> Unit,
+    onCopyAsNew: () -> Unit,
+    moveControl: @Composable () -> Unit,
     onDelete: () -> Unit,
     onAuthorizeReveal: suspend () -> Boolean,
     onConceal: () -> Unit,
@@ -383,9 +395,9 @@ private fun CardDetailPanel(
         flipped = false
         revealed = false
     }
-    Column(Modifier.fillMaxSize().padding(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(card.nickname, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
             }
             Row {
@@ -426,6 +438,11 @@ private fun CardDetailPanel(
             color = Color.White.copy(alpha = 0.36f),
             fontSize = 11.sp,
         )
+        Spacer(Modifier.height(12.dp))
+        moveControl()
+        OutlinedButton(onClick = onCopyAsNew, enabled = !authenticating, modifier = Modifier.fillMaxWidth()) {
+            Text("以此卡新建")
+        }
     }
 }
 

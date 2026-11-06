@@ -5,6 +5,7 @@ import com.pdh.cardvault.desktop.model.DesktopAddress
 import com.pdh.cardvault.desktop.model.DesktopFolder
 import com.pdh.cardvault.desktop.model.DesktopFolderKind
 import java.time.Clock
+import com.pdh.cardvault.wallet.WalletDisplayOrder
 
 class DesktopCardRepository(
     private val vault: EncryptedDesktopVault,
@@ -31,6 +32,25 @@ class DesktopCardRepository(
     }.toList()
 
     @Synchronized
+    fun walletOrder(kind: DesktopFolderKind): List<String> {
+        val defaults = folders(kind).map { WalletDisplayOrder.folder(it.id) } + when (kind) {
+            DesktopFolderKind.CARDS -> cards().map { WalletDisplayOrder.record(it.id) }
+            DesktopFolderKind.ADDRESSES -> addresses().map { WalletDisplayOrder.record(it.id) }
+        }
+        val stored = if (kind == DesktopFolderKind.CARDS) snapshot.cardWalletOrder else snapshot.addressWalletOrder
+        return WalletDisplayOrder.normalize(stored, defaults)
+    }
+
+    @Synchronized
+    fun reorderWalletEntries(kind: DesktopFolderKind, visibleKeys: List<String>): Boolean {
+        val merged = WalletDisplayOrder.mergeVisible(walletOrder(kind), visibleKeys)
+        persist(snapshot.cards, snapshot.syncState,
+            cardWalletOrder = if (kind == DesktopFolderKind.CARDS) merged else snapshot.cardWalletOrder,
+            addressWalletOrder = if (kind == DesktopFolderKind.ADDRESSES) merged else snapshot.addressWalletOrder)
+        return true
+    }
+
+    @Synchronized
     fun snapshot(): DesktopVaultSnapshot = snapshot.copy(
         cards = snapshot.cards.toList(),
         addresses = snapshot.addresses.toList(),
@@ -54,6 +74,8 @@ class DesktopCardRepository(
     @Synchronized
     fun replaceSnapshot(imported: DesktopVaultSnapshot) {
         val next = imported.copy(
+            cardWalletOrder = snapshot.cardWalletOrder,
+            addressWalletOrder = snapshot.addressWalletOrder,
             cards = imported.cards.reindexed(),
             addresses = imported.addresses.reindexedAddresses(),
             revision = snapshot.revision + 1,
@@ -206,8 +228,11 @@ class DesktopCardRepository(
     }
 
     @Synchronized
-    fun createFolder(name: String, kind: DesktopFolderKind): DesktopFolder {
-        val folder = DesktopFolder.create(name, kind, clock)
+    fun createFolder(name: String, kind: DesktopFolderKind, parentFolderId: String? = null): DesktopFolder {
+        require(parentFolderId == null || snapshot.folders.any { it.id == parentFolderId && it.kind == kind }) {
+            "上级文件夹无效。"
+        }
+        val folder = DesktopFolder.create(name, kind, clock, parentFolderId)
         val vector = VersionVector().increment(snapshot.syncState.deviceId)
         persist(
             cards = snapshot.cards,
@@ -241,6 +266,47 @@ class DesktopCardRepository(
     }
 
     @Synchronized
+    fun moveFolder(id: String, parentFolderId: String?): Boolean {
+        val existing = snapshot.folders.firstOrNull { it.id == id } ?: return false
+        val byId = snapshot.folders.associateBy(DesktopFolder::id)
+        val seen = mutableSetOf(id)
+        var next = parentFolderId
+        while (next != null) {
+            require(seen.add(next)) { "不能将文件夹移入自身或子文件夹。" }
+            val parent = byId[next] ?: throw IllegalArgumentException("上级文件夹无效。")
+            require(parent.kind == existing.kind) { "上级文件夹无效。" }
+            next = parent.parentFolderId
+        }
+        if (existing.parentFolderId == parentFolderId) return true
+        val vector = (snapshot.syncState.folderRecordVectors[id] ?: VersionVector())
+            .increment(snapshot.syncState.deviceId)
+        persist(
+            cards = snapshot.cards,
+            state = snapshot.syncState.copy(
+                folderRecordVectors = snapshot.syncState.folderRecordVectors + (id to vector),
+            ),
+            folders = snapshot.folders.map {
+                if (it.id == id) it.copy(parentFolderId = parentFolderId, updatedAtEpochMillis = maxOf(clock.millis(), it.updatedAtEpochMillis + 1)) else it
+            },
+        )
+        return true
+    }
+
+    @Synchronized
+    fun setFolderColor(id: String, colorRgb: Int): Boolean {
+        com.pdh.cardvault.wallet.FolderAppearance.requireValidColor(colorRgb)
+        val existing = snapshot.folders.firstOrNull { it.id == id } ?: return false
+        if (existing.colorRgb == colorRgb) return true
+        val vector = (snapshot.syncState.folderRecordVectors[id] ?: VersionVector()).increment(snapshot.syncState.deviceId)
+        persist(snapshot.cards,
+            snapshot.syncState.copy(folderRecordVectors = snapshot.syncState.folderRecordVectors + (id to vector)),
+            folders = snapshot.folders.map {
+                if (it.id == id) it.copy(colorRgb = colorRgb, updatedAtEpochMillis = maxOf(clock.millis(), it.updatedAtEpochMillis + 1)) else it
+            })
+        return true
+    }
+
+    @Synchronized
     fun deleteFolder(id: String): Boolean {
         val existing = snapshot.folders.firstOrNull { it.id == id } ?: return false
         val vector = (snapshot.syncState.folderRecordVectors[id] ?: VersionVector())
@@ -248,6 +314,7 @@ class DesktopCardRepository(
         val tombstone = DesktopTombstone(id, maxOf(clock.millis(), existing.updatedAtEpochMillis), vector)
         val affectedCards = snapshot.cards.filter { it.folderId == id }
         val affectedAddresses = snapshot.addresses.filter { it.folderId == id }
+        val affectedFolders = snapshot.folders.filter { it.parentFolderId == id }
         val cardVectors = snapshot.syncState.recordVectors + affectedCards.associate { card ->
             card.id to (snapshot.syncState.recordVectors[card.id] ?: VersionVector())
                 .increment(snapshot.syncState.deviceId)
@@ -257,15 +324,20 @@ class DesktopCardRepository(
                 .increment(snapshot.syncState.deviceId)
         }
         persist(
-            cards = snapshot.cards.map { if (it.folderId == id) it.copy(folderId = null) else it },
+            cards = snapshot.cards.map { if (it.folderId == id) it.copy(folderId = existing.parentFolderId) else it },
             state = snapshot.syncState.copy(
-                folderRecordVectors = snapshot.syncState.folderRecordVectors - id,
                 folderTombstones = snapshot.syncState.folderTombstones + (id to tombstone),
                 recordVectors = cardVectors,
                 addressRecordVectors = addressVectors,
+                folderRecordVectors = snapshot.syncState.folderRecordVectors - id + affectedFolders.associate { folder ->
+                    folder.id to (snapshot.syncState.folderRecordVectors[folder.id] ?: VersionVector())
+                        .increment(snapshot.syncState.deviceId)
+                },
             ),
-            addresses = snapshot.addresses.map { if (it.folderId == id) it.copy(folderId = null) else it },
-            folders = snapshot.folders.filterNot { it.id == id },
+            addresses = snapshot.addresses.map { if (it.folderId == id) it.copy(folderId = existing.parentFolderId) else it },
+            folders = snapshot.folders.filterNot { it.id == id }.map {
+                if (it.parentFolderId == id) it.copy(parentFolderId = existing.parentFolderId, updatedAtEpochMillis = maxOf(clock.millis(), it.updatedAtEpochMillis + 1)) else it
+            },
             cardFolderOrder = snapshot.cardFolderOrder.filterNot { it == id },
             addressFolderOrder = snapshot.addressFolderOrder.filterNot { it == id },
         )
@@ -323,6 +395,8 @@ class DesktopCardRepository(
         folders: List<DesktopFolder> = snapshot.folders,
         cardFolderOrder: List<String?> = snapshot.cardFolderOrder,
         addressFolderOrder: List<String?> = snapshot.addressFolderOrder,
+        cardWalletOrder: List<String> = snapshot.cardWalletOrder,
+        addressWalletOrder: List<String> = snapshot.addressWalletOrder,
     ) {
         val cardFolderIds = folders.filter { it.kind == DesktopFolderKind.CARDS }.map(DesktopFolder::id)
         val addressFolderIds = folders.filter { it.kind == DesktopFolderKind.ADDRESSES }.map(DesktopFolder::id)
@@ -334,6 +408,10 @@ class DesktopCardRepository(
             folders = folders,
             cardFolderOrder = normalizeFolderOrder(cardFolderOrder, emptyList(), cardFolderIds),
             addressFolderOrder = normalizeFolderOrder(addressFolderOrder, emptyList(), addressFolderIds),
+            cardWalletOrder = WalletDisplayOrder.normalize(cardWalletOrder,
+                cardFolderIds.map(WalletDisplayOrder::folder) + cards.map { WalletDisplayOrder.record(it.id) }),
+            addressWalletOrder = WalletDisplayOrder.normalize(addressWalletOrder,
+                addressFolderIds.map(WalletDisplayOrder::folder) + addresses.map { WalletDisplayOrder.record(it.id) }),
         )
         vault.save(next)
         snapshot = next

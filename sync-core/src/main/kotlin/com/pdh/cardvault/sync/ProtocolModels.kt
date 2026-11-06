@@ -367,15 +367,21 @@ enum class FolderCollectionKind {
 }
 
 data class FolderSyncPayload(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = 3,
     val collection: FolderCollectionKind,
     val name: String,
+    val parentFolderId: String? = null,
+    val colorRgb: Int = com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB,
 ) {
     init {
-        require(schemaVersion == 1) { "Invalid folder exchange data." }
+        require(schemaVersion in 1..3) { "Invalid folder exchange data." }
+        com.pdh.cardvault.wallet.FolderAppearance.requireValidColor(colorRgb)
+        require(schemaVersion >= 3 || colorRgb == com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB) { "Invalid folder exchange data." }
         require(name == name.trim() && name.codePointLength() in 1..50) {
             "Invalid folder exchange data."
         }
+        require(schemaVersion >= 2 || parentFolderId == null) { "Invalid folder exchange data." }
+        parentFolderId?.let(ProtocolValidation::requireUuid)
     }
 
     override fun toString(): String = "FolderSyncPayload(name=redacted, collection=$collection)"

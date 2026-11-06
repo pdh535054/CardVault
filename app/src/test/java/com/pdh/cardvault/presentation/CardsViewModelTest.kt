@@ -4,6 +4,9 @@ import com.pdh.cardvault.data.room.PersistentBankCardRepository
 import com.pdh.cardvault.data.room.PersistentCardDetail
 import com.pdh.cardvault.data.room.PersistentCardListItem
 import com.pdh.cardvault.data.room.PersistentCardSecrets
+import com.pdh.cardvault.data.room.PersistentVaultFolder
+import com.pdh.cardvault.data.room.PersistentVaultFolderRepository
+import com.pdh.cardvault.data.room.VaultFolderKind
 import com.pdh.cardvault.domain.model.BankCardInput
 import com.pdh.cardvault.domain.model.CardNetwork
 import com.pdh.cardvault.domain.validation.BankCardValidationError
@@ -31,6 +34,102 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CardsViewModelTest {
+    @Test fun movingFromDetailPreservesSourceContextAndNeverReadsSecrets() {
+        val fixture = fixture(unlock = false)
+        val source = fixture.repository.seedFolder("Synthetic source")
+        val target = fixture.repository.seedFolder("Synthetic target")
+        val input = validInput().copy(folderId = source.toString())
+        val id = fixture.repository.seed(input)
+        fixture.viewModel.onVaultAccessAllowed {}
+        fixture.viewModel.selectWalletFolder(source)
+        fixture.viewModel.loadCardDetail(id.toString())
+        assertFalse(fixture.viewModel.moveCardToFolder(id, source))
+        assertFalse(fixture.viewModel.moveCardToFolder(id, UUID.randomUUID()))
+        assertTrue(fixture.viewModel.moveCardToFolder(id, target))
+        assertEquals(input.copy(folderId = target.toString()), fixture.repository.input(id))
+        assertEquals(source, fixture.viewModel.uiState.value.selectedFolderId)
+        assertEquals(target, fixture.viewModel.uiState.value.cards.single().folderId)
+        assertTrue(fixture.viewModel.moveCardToFolder(id, null))
+        assertNull(fixture.viewModel.uiState.value.cards.single().folderId)
+        assertEquals(0, fixture.repository.secretsReadCount)
+        assertEquals(0, fixture.repository.editReadCount)
+        assertEquals(id, (fixture.viewModel.uiState.value.detail as CardDetailUiState.Loaded).recordId)
+    }
+
+    @Test
+    fun copiedCardKeepsAppearanceAndCanSaveIntoSameOtherOrRootFolderWithoutChangingSource() {
+        for (destinationIndex in 0..2) {
+            val fixture = fixture(unlock = false)
+            val sourceFolder = fixture.repository.seedFolder("Synthetic source")
+            val otherFolder = fixture.repository.seedFolder("Synthetic destination")
+            val original = validInput(cardNumber = "8".repeat(19), saveCvv = true, cvv = "8".repeat(4),
+                cardTemplateId = "custom:jade:waves").copy(folderId = sourceFolder.toString())
+            val source = fixture.repository.seed(original)
+            fixture.viewModel.onVaultAccessAllowed {}
+            fixture.viewModel.loadCardDetail(source.toString())
+
+            assertTrue(fixture.viewModel.prepareCardCopy(source))
+            val form = fixture.viewModel.uiState.value.form
+            assertEquals(CardNavigationEvent.CopyReady, fixture.viewModel.uiState.value.navigationEvent)
+            assertTrue(form.isTemplateCopy)
+            assertEquals(original.nickname, form.nickname)
+            assertEquals(original.issuerName, form.issuerName)
+            assertEquals(original.cardTemplateId, form.cardTemplateId)
+            assertEquals(original.notes, form.notes)
+            assertEquals(sourceFolder, form.folderId)
+            assertEquals("", form.cardNumber)
+            assertEquals("", form.expiryDigits)
+            assertEquals("", form.cvv)
+            assertFalse(form.saveCvv)
+            assertEquals(0, fixture.repository.editReadCount)
+            assertEquals(0, fixture.repository.secretsReadCount)
+            assertEquals(1, fixture.repository.size)
+            assertFalse(fixture.viewModel.submitCard())
+
+            val destination = when (destinationIndex) { 0 -> sourceFolder; 1 -> otherFolder; else -> null }
+            fixture.viewModel.selectAddFolder(destination)
+            fixture.viewModel.updateField(CardFormField.CardNumber, "9".repeat(19))
+            fixture.viewModel.updateField(CardFormField.ExpiryDate, "01/99")
+            assertTrue(fixture.viewModel.submitCard())
+            val newId = fixture.repository.orderedIds().first()
+            assertNotEquals(source, newId)
+            val copy = fixture.repository.input(newId)
+            assertEquals(destination?.toString(), copy.folderId)
+            assertEquals(original.cardTemplateId, copy.cardTemplateId)
+            assertFalse(copy.saveCvv)
+            assertNull(copy.cvv)
+            assertEquals(original, fixture.repository.input(source))
+            assertEquals(2, fixture.repository.size)
+            assertFalse(fixture.viewModel.uiState.value.form.isTemplateCopy)
+            assertEquals(destination, fixture.viewModel.uiState.value.selectedFolderId)
+        }
+    }
+
+    @Test fun cancellingTemplateCopyDoesNotCreateARecordAndUnknownSourceIsRejected() {
+        val fixture = fixtureWithDetail(saveCvv = true)
+        assertFalse(fixture.viewModel.prepareCardCopy(UUID.randomUUID()))
+        authorize(fixture, AuthenticationAction.RevealCardSecrets)
+        val readsBeforeCopy = fixture.repository.secretsReadCount
+        assertTrue(fixture.viewModel.prepareCardCopy(fixture.recordId))
+        assertEquals(readsBeforeCopy, fixture.repository.secretsReadCount)
+        assertEquals(RevealedCardSecretsUiState.Hidden, fixture.viewModel.uiState.value.revealedSecrets)
+        fixture.viewModel.clearForm()
+        assertEquals(1, fixture.repository.size)
+        assertEquals("", fixture.viewModel.uiState.value.form.nickname)
+        assertFalse(fixture.viewModel.uiState.value.form.isTemplateCopy)
+    }
+
+    @Test
+    fun folderCountIncludesNestedCards() {
+        val parent = UUID.randomUUID()
+        val child = UUID.randomUUID()
+        val folders = listOf(
+            PersistentVaultFolder(parent, "Synthetic parent", VaultFolderKind.CARDS),
+            PersistentVaultFolder(child, "Synthetic child", VaultFolderKind.CARDS, parent),
+        )
+        assertEquals(2, countFolderTreeItems(folders, parent, listOf(parent, child, null)))
+        assertEquals(1, countFolderTreeItems(folders, child, listOf(parent, child, null)))
+    }
     @Test
     fun vaultStartsLockedAndLoadsOnlyFrontSafeProjectionsAfterUnlock() {
         val fixture = fixture(unlock = false)
@@ -49,6 +148,37 @@ class CardsViewModelTest {
         assertTrue(fieldNames.none { name -> "expiry" in name })
         assertTrue(fieldNames.none { name -> "cvv" in name })
         assertFalse(item.toString().contains(fixture.repository.input(id).cardNumber))
+    }
+
+    @Test
+    fun selectedFolderAndLastFourSearchSurviveDetailReturnButClearOnVaultLock() {
+        val fixture = fixture(unlock = false)
+        val folderId = fixture.repository.seedFolder("Synthetic group")
+        val recordId = fixture.repository.seed(
+            validInput(cardNumber = "0".repeat(8) + "1234")
+                .copy(folderId = folderId.toString()),
+        )
+        fixture.viewModel.onVaultAccessAllowed {}
+
+        fixture.viewModel.selectWalletFolder(folderId)
+        fixture.viewModel.updateLastFourSearchQuery("1x2-3 4")
+        assertEquals(folderId, fixture.viewModel.uiState.value.selectedFolderId)
+        assertEquals("1234", fixture.viewModel.uiState.value.lastFourSearchQuery)
+        assertEquals("1234", fixture.viewModel.uiState.value.cards.single().lastFour)
+
+        fixture.viewModel.loadCardDetail(recordId.toString())
+        fixture.viewModel.clearCardDetail()
+        assertEquals(folderId, fixture.viewModel.uiState.value.selectedFolderId)
+        assertEquals("1234", fixture.viewModel.uiState.value.lastFourSearchQuery)
+
+        fixture.viewModel.selectWalletFolder(null)
+        assertNull(fixture.viewModel.uiState.value.selectedFolderId)
+        assertEquals("", fixture.viewModel.uiState.value.lastFourSearchQuery)
+
+        fixture.viewModel.updateLastFourSearchQuery("98765")
+        assertEquals("9876", fixture.viewModel.uiState.value.lastFourSearchQuery)
+        fixture.viewModel.onVaultAccessRevoked()
+        assertEquals("", fixture.viewModel.uiState.value.lastFourSearchQuery)
     }
 
     @Test
@@ -798,17 +928,23 @@ private class FakeSensitiveClipboardController : SensitiveClipboardController {
     override fun toString(): String = "FakeSensitiveClipboardController(contents=redacted)"
 }
 
-private class FakePersistentBankCardRepository : PersistentBankCardRepository {
+private class FakePersistentBankCardRepository :
+    PersistentBankCardRepository,
+    PersistentVaultFolderRepository {
     private data class StoredCard(
         val id: UUID,
         val input: BankCardInput,
     )
 
     private val cards = mutableListOf<StoredCard>()
+    private val folders = mutableListOf<PersistentVaultFolder>()
+    private var folderOrder = listOf<UUID?>(null)
     var unlocked: Boolean = false
         private set
     var failUnlock: Boolean = false
     var editReadCount: Int = 0
+        private set
+    var secretsReadCount: Int = 0
         private set
     var deleteCount: Int = 0
         private set
@@ -846,6 +982,8 @@ private class FakePersistentBankCardRepository : PersistentBankCardRepository {
                 issuerName = input.issuerName,
                 cardTemplateId = input.cardTemplateId,
                 cardNetwork = CardNetworkDetector.detect(input.cardNumber),
+                lastFour = requireNotNull(CardNumberTools.lastFour(input.cardNumber)),
+                folderId = input.folderId?.let(UUID::fromString),
             )
         }
     }
@@ -867,6 +1005,7 @@ private class FakePersistentBankCardRepository : PersistentBankCardRepository {
 
     override suspend fun getSecretsForAuthenticatedUse(id: UUID): PersistentCardSecrets? {
         requireUnlocked()
+        secretsReadCount += 1
         secretsReadGate?.await()
         return cards.firstOrNull { it.id == id }?.input?.let { input ->
             PersistentCardSecrets(
@@ -905,6 +1044,73 @@ private class FakePersistentBankCardRepository : PersistentBankCardRepository {
         cards.clear()
         cards += orderedIds.map(byId::getValue)
         reorderCount += 1
+    }
+
+    override suspend fun getFolders(kind: VaultFolderKind): List<PersistentVaultFolder> =
+        folders.filter { it.kind == kind }
+
+    override suspend fun getFolderOrder(kind: VaultFolderKind): List<UUID?> = folderOrder
+
+    private var walletOrder: List<String> = emptyList()
+    override suspend fun getWalletOrder(kind: VaultFolderKind): List<String> = walletOrder
+    override suspend fun reorderWalletEntries(kind: VaultFolderKind, orderedKeys: List<String>) {
+        walletOrder = orderedKeys
+    }
+
+    override suspend fun reorderFolders(kind: VaultFolderKind, orderedIds: List<UUID?>) {
+        folderOrder = orderedIds
+    }
+
+    override suspend fun createFolder(kind: VaultFolderKind, name: String, parentFolderId: UUID?): UUID {
+        val id = UUID.randomUUID()
+        folders += PersistentVaultFolder(id, name, kind, parentFolderId)
+        folderOrder = folderOrder + id
+        return id
+    }
+
+    override suspend fun renameFolder(id: UUID, name: String): Boolean {
+        val index = folders.indexOfFirst { it.id == id }
+        if (index < 0) return false
+        folders[index] = folders[index].copy(name = name)
+        return true
+    }
+
+    override suspend fun moveFolder(id: UUID, parentFolderId: UUID?): Boolean {
+        val index = folders.indexOfFirst { it.id == id }
+        if (index < 0) return false
+        folders[index] = folders[index].copy(parentFolderId = parentFolderId)
+        return true
+    }
+
+    override suspend fun setFolderColor(id: UUID, colorRgb: Int): Boolean {
+        val index = folders.indexOfFirst { it.id == id }
+        if (index < 0) return false
+        folders[index] = folders[index].copy(colorRgb = colorRgb)
+        return true
+    }
+
+    override suspend fun deleteFolder(id: UUID): Boolean {
+        if (!folders.removeAll { it.id == id }) return false
+        folderOrder = folderOrder.filterNot { it == id }
+        return true
+    }
+
+    override suspend fun moveCardToFolder(cardId: UUID, folderId: UUID?): Boolean {
+        val index = cards.indexOfFirst { it.id == cardId }
+        if (index < 0) return false
+        cards[index] = cards[index].copy(
+            input = cards[index].input.copy(folderId = folderId?.toString()),
+        )
+        return true
+    }
+
+    override suspend fun moveAddressToFolder(addressId: UUID, folderId: UUID?): Boolean = false
+
+    fun seedFolder(name: String): UUID {
+        val id = UUID.randomUUID()
+        folders += PersistentVaultFolder(id, name, VaultFolderKind.CARDS)
+        folderOrder = folderOrder + id
+        return id
     }
 
     fun seed(input: BankCardInput): UUID {

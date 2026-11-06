@@ -4,11 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -50,17 +52,19 @@ internal fun DesktopFolderBar(
     unfiledCount: Int,
     itemCount: (String) -> Int,
     onSelect: (String?) -> Unit,
-    onCreate: (String) -> Unit,
+    onCreate: (String, String?) -> Unit,
     onRename: (String, String) -> Unit,
+    onMove: (String, String?) -> Unit,
     onDelete: (String) -> Unit,
     onReorder: (List<String?>) -> Unit,
     onBounds: (String?, Rect) -> Unit,
 ) {
     var create by remember { mutableStateOf(false) }
     var rename by remember { mutableStateOf<DesktopFolder?>(null) }
+    var moving by remember { mutableStateOf<DesktopFolder?>(null) }
     var delete by remember { mutableStateOf<DesktopFolder?>(null) }
-    val sourceItems = remember(folders, folderOrder, unfiledCount) {
-        buildDesktopFolderItems(folders, folderOrder, unfiledCount, itemCount)
+    val sourceItems = remember(folders, folderOrder, unfiledCount, selectedId) {
+        buildDesktopFolderItems(folders, folderOrder, unfiledCount, itemCount, selectedId)
     }
     var draftItems by remember { mutableStateOf(sourceItems) }
     var dragStartItems by remember { mutableStateOf(sourceItems) }
@@ -76,8 +80,15 @@ internal fun DesktopFolderBar(
         if (draggingKey == null) draftItems = sourceItems
     }
     Column {
+        if (selectedId != null) {
+            val current = folders.firstOrNull { it.id == selectedId }
+            Text("‹ 返回上级  ·  ${desktopFolderPath(folders, selectedId)}",
+                color = Color(0xFFAFC6FF), fontSize = 14.sp,
+                modifier = Modifier.onGloballyPositioned { onBounds(current?.parentFolderId, it.boundsInRoot()) }
+                    .clickable { onSelect(current?.parentFolderId) }.padding(bottom = 8.dp))
+        }
         Row(horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("文件夹", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+            Text(if (selectedId == null) "文件夹" else "子文件夹", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
             Spacer(Modifier.weight(1f))
             Text("新建", color = Color(0xFFAFC6FF), modifier = Modifier.clickable { create = true }, fontSize = 14.sp)
         }
@@ -97,6 +108,7 @@ internal fun DesktopFolderBar(
                         onClick = { onSelect(item.id) },
                         onBounds = { onBounds(item.id, it) },
                         onEdit = item.folder?.let { folder -> { rename = folder } },
+                        onMove = item.folder?.let { folder -> { moving = folder } },
                         onDelete = item.folder?.let { folder -> { delete = folder } },
                         modifier = Modifier
                             .zIndex(if (isDragging) draftItems.size + 1f else index.toFloat())
@@ -135,7 +147,9 @@ internal fun DesktopFolderBar(
                                         }
                                     },
                                     onDragEnd = {
-                                        if (draggingKey == item.key) onReorder(draftItems.map { it.id })
+                                        if (draggingKey == item.key) onReorder(
+                                            mergeDesktopFolderOrder(folderOrder, draftItems.map { it.id }),
+                                        )
                                         draggingKey = null
                                         dragDistancePx = 0f
                                     },
@@ -151,20 +165,38 @@ internal fun DesktopFolderBar(
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text("长按文件夹可调整顺序；长按卡片可拖入文件夹", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp)
+        Text("拖动排序；在文件夹上停稳，显示「松手移入」后松手归档", color = Color.White.copy(alpha = 0.4f), fontSize = 11.sp)
     }
-    if (create) DesktopFolderNameDialog("新建文件夹", "", { create = false }) { create = false; onCreate(it) }
+    if (create) DesktopFolderNameDialog("新建文件夹", "", { create = false }) { create = false; onCreate(it, selectedId) }
     rename?.let { folder ->
         DesktopFolderNameDialog("重命名文件夹", folder.name, { rename = null }) {
             rename = null
             onRename(folder.id, it)
         }
     }
+    moving?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { moving = null },
+            title = { Text("移动文件夹") },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    TextButton(onClick = { moving = null; onMove(folder.id, null) }) { Text("顶层") }
+                    folders.filterNot { wouldCreateDesktopFolderCycle(folders, folder.id, it.id) }
+                        .forEach { destination ->
+                            TextButton(onClick = { moving = null; onMove(folder.id, destination.id) }) {
+                                Text(desktopFolderPath(folders, destination.id), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                }
+            },
+            confirmButton = { TextButton(onClick = { moving = null }) { Text("取消") } },
+        )
+    }
     delete?.let { folder ->
         AlertDialog(
             onDismissRequest = { delete = null },
             title = { Text("删除文件夹？") },
-            text = { Text("其中的内容会移回未归档，不会被删除。") },
+            text = { Text("卡片和子文件夹会移至上一级，不会删除内容。") },
             confirmButton = { TextButton(onClick = { delete = null; onDelete(folder.id) }) { Text("删除") } },
             dismissButton = { TextButton(onClick = { delete = null }) { Text("取消") } },
         )
@@ -180,6 +212,7 @@ private fun DesktopFolderChip(
     onBounds: (Rect) -> Unit,
     modifier: Modifier = Modifier,
     onEdit: (() -> Unit)? = null,
+    onMove: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
 ) {
     Column(
@@ -194,6 +227,7 @@ private fun DesktopFolderChip(
             if (count > 0) Text("  $count", color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
             Spacer(Modifier.weight(1f))
             if (onEdit != null) Text("✎", color = Color.White.copy(alpha = 0.6f), modifier = Modifier.clickable(onClick = onEdit))
+            if (onMove != null) Text(" ↗", color = Color.White.copy(alpha = 0.6f), modifier = Modifier.clickable(onClick = onMove))
             if (onDelete != null) Text(" ×", color = Color.White.copy(alpha = 0.6f), modifier = Modifier.clickable(onClick = onDelete))
         }
         Text(name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -214,12 +248,58 @@ private fun buildDesktopFolderItems(
     requestedOrder: List<String?>,
     unfiledCount: Int,
     itemCount: (String) -> Int,
+    selectedId: String?,
 ): List<DesktopFolderItem> {
     val byId = folders.associateBy(DesktopFolder::id)
     return normalizeDesktopFolderOrder(requestedOrder, folders.map(DesktopFolder::id)).mapNotNull { id ->
-        if (id == null) DesktopFolderItem(null, "未归档", unfiledCount, null)
-        else byId[id]?.let { folder -> DesktopFolderItem(id, folder.name, itemCount(id), folder) }
+        if (id == null) {
+            if (selectedId == null) DesktopFolderItem(null, "未归档", unfiledCount, null) else null
+        } else byId[id]?.takeIf { it.parentFolderId == selectedId }
+            ?.let { folder -> DesktopFolderItem(id, folder.name, itemCount(id), folder) }
     }
+}
+
+internal fun mergeDesktopFolderOrder(globalOrder: List<String?>, reorderedSiblings: List<String?>): List<String?> {
+    if (reorderedSiblings.size != reorderedSiblings.distinct().size) return globalOrder
+    val siblings = reorderedSiblings.toSet()
+    if (!globalOrder.containsAll(reorderedSiblings)) return globalOrder
+    val replacement = reorderedSiblings.iterator()
+    return globalOrder.map { if (it in siblings) replacement.next() else it }
+}
+
+internal fun wouldCreateDesktopFolderCycle(folders: List<DesktopFolder>, movedId: String, destinationId: String): Boolean {
+    val byId = folders.associateBy(DesktopFolder::id)
+    val visited = mutableSetOf<String>()
+    var next: String? = destinationId
+    while (next != null) {
+        if (next == movedId || !visited.add(next)) return true
+        next = byId[next]?.parentFolderId
+    }
+    return false
+}
+
+internal fun countDesktopFolderTreeItems(folders: List<DesktopFolder>, folderId: String, itemFolderIds: List<String?>): Int {
+    val children = folders.groupBy(DesktopFolder::parentFolderId)
+    val seen = mutableSetOf<String>()
+    val pending = ArrayDeque<String>().apply { add(folderId) }
+    while (pending.isNotEmpty()) {
+        val current = pending.removeFirst()
+        if (seen.add(current)) children[current].orEmpty().forEach { pending.add(it.id) }
+    }
+    return itemFolderIds.count { it in seen }
+}
+
+internal fun desktopFolderPath(folders: List<DesktopFolder>, id: String): String {
+    val byId = folders.associateBy(DesktopFolder::id)
+    val names = mutableListOf<String>()
+    val visited = mutableSetOf<String>()
+    var next: String? = id
+    while (next != null && visited.add(next)) {
+        val folder = byId[next] ?: break
+        names += folder.name
+        next = folder.parentFolderId
+    }
+    return names.asReversed().joinToString(" / ")
 }
 
 internal fun normalizeDesktopFolderOrder(
@@ -254,7 +334,7 @@ private val DESKTOP_FOLDER_ITEM_STEP = 140.dp
 private const val DESKTOP_UNFILED_KEY = "__unfiled__"
 
 @Composable
-private fun DesktopFolderNameDialog(title: String, initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+internal fun DesktopFolderNameDialog(title: String, initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var value by remember(initial) { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,

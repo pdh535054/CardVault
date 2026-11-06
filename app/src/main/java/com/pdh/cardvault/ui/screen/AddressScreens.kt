@@ -1,5 +1,7 @@
 package com.pdh.cardvault.ui.screen
 
+import androidx.activity.compose.BackHandler
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -15,10 +17,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -52,7 +54,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -60,7 +61,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
@@ -76,6 +78,9 @@ import com.pdh.cardvault.presentation.AddressListItemUiModel
 import com.pdh.cardvault.presentation.AddressOperationMessage
 import com.pdh.cardvault.presentation.VaultFolderUiModel
 import com.pdh.cardvault.ui.card.AddressWalletStack
+import com.pdh.cardvault.ui.card.MixedWalletStack
+import com.pdh.cardvault.ui.card.WalletStackEntry
+import com.pdh.cardvault.ui.card.orderedWalletEntries
 import com.pdh.cardvault.ui.card.CardTemplatePicker
 import com.pdh.cardvault.ui.card.CardTemplatePreview
 import com.pdh.cardvault.ui.card.CardTemplateRegistry
@@ -89,27 +94,34 @@ fun AddressListScreen(
     addresses: List<AddressListItemUiModel>,
     folders: List<VaultFolderUiModel>,
     folderOrder: List<UUID?>,
+    walletOrder: List<String>,
+    selectedFolderId: UUID?,
     sortingInProgress: Boolean,
     operationMessage: AddressOperationMessage,
     onBack: () -> Unit,
     onAddAddress: () -> Unit,
     onAddressSelected: (UUID) -> Unit,
     onAddressesReordered: (List<UUID>) -> Unit,
+    onFolderSelected: (UUID?) -> Unit,
     onFoldersReordered: (List<UUID?>) -> Unit,
-    onCreateFolder: (String) -> Unit,
+    onWalletEntriesReordered: (List<String>) -> Unit,
+    onCreateFolder: (String, UUID?) -> Unit,
     onRenameFolder: (UUID, String) -> Unit,
+    onSetFolderColor: (UUID, Int) -> Unit,
+    onMoveFolder: (UUID, UUID?) -> Unit,
     onDeleteFolder: (UUID) -> Unit,
     onMoveAddressToFolder: (UUID, UUID?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var selectedFolderId by remember { mutableStateOf<UUID?>(null) }
-    val folderTargets = remember { mutableMapOf<UUID?, Rect>() }
-    LaunchedEffect(folders) {
-        if (selectedFolderId != null && folders.none { it.id == selectedFolderId }) {
-            selectedFolderId = null
-        }
-    }
     val visibleAddresses = addresses.filter { it.folderId == selectedFolderId }
+    val children = folders.filter { it.parentFolderId == selectedFolderId }
+    val entries = orderedWalletEntries(walletOrder,
+        children.map { WalletStackEntry(it.id, true) } + visibleAddresses.map { WalletStackEntry(it.id, false) })
+    val goBack = {
+        if (selectedFolderId != null) onFolderSelected(parentFolderForBack(folders, selectedFolderId))
+        else onBack()
+    }
+    BackHandler(enabled = selectedFolderId != null) { goBack() }
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
@@ -120,49 +132,51 @@ fun AddressListScreen(
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             item("address-header") {
-                AddressHeader(addresses.size, onBack, onAddAddress)
+                AddressHeader(addresses.size, goBack, onAddAddress)
             }
             if (operationMessage != AddressOperationMessage.None) {
                 item("address-message") { AddressOperationNotice(operationMessage) }
             }
-            item("address-folder-shelf") {
-                VaultFolderShelf(
-                    folders = folders,
-                    unfiledCount = addresses.count { it.folderId == null },
-                    folderOrder = folderOrder,
-                    selectedFolderId = selectedFolderId,
-                    onSelect = { selectedFolderId = it },
-                    onCreate = onCreateFolder,
-                    onRename = onRenameFolder,
-                    onDelete = onDeleteFolder,
-                    onReorder = onFoldersReordered,
-                    onTargetBoundsChanged = { id, bounds -> folderTargets[id] = bounds },
-                )
+            item("address-folder-actions") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(onClick = goBack, enabled = selectedFolderId != null,
+                        modifier = Modifier.weight(1f)) {
+                        Text(if (selectedFolderId == null) "全部分类" else "‹ ${folderPath(folders, selectedFolderId)}", maxLines = 1)
+                    }
+                    NewWalletFolderButton { name -> onCreateFolder(name, selectedFolderId) }
+                }
+                Text("拖动排序；在文件夹上停稳，显示「松手移入」后松手归档",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (visibleAddresses.isEmpty()) {
-                item("address-empty") { EmptyAddressState(onAddAddress) }
+            if (entries.isEmpty()) {
+                item("address-empty") {
+                    if (folders.any { it.parentFolderId == selectedFolderId }) {
+                        Text("请选择一个子文件夹", modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                    } else EmptyAddressState(onAddAddress)
+                }
             } else {
-                item("address-stack") {
-                    AddressWalletStack(
-                        addresses = visibleAddresses,
-                        sortingInProgress = sortingInProgress,
-                        openActionLabel = stringResource(R.string.action_open_address_detail),
-                        moveUpActionLabel = stringResource(R.string.action_move_up),
-                        moveDownActionLabel = stringResource(R.string.action_move_down),
-                        onAddressOpened = onAddressSelected,
-                        onAddressesReordered = { orderedVisibleIds ->
-                            onAddressesReordered(mergeVisibleAddressOrder(addresses, orderedVisibleIds))
+                item("address-stack-$selectedFolderId") {
+                    MixedWalletStack(
+                        entries = entries, enabled = !sortingInProgress,
+                        recordOpenLabel = stringResource(R.string.action_open_address_detail),
+                        onOpen = { if (it.isFolder) onFolderSelected(it.id) else onAddressSelected(it.id) },
+                        onReorder = onWalletEntriesReordered,
+                        folderName = { id -> children.firstOrNull { it.id == id }?.name.orEmpty() },
+                        canMoveIntoFolder = { entry, destination -> canDropWalletEntry(entry, destination, folders) },
+                        onMoveIntoFolder = { entry, destination ->
+                            if (entry.isFolder) onMoveFolder(entry.id, destination)
+                            else onMoveAddressToFolder(entry.id, destination)
                         },
-                        onAddressDropped = { addressId, position ->
-                            val target = folderTargets.entries
-                                .firstOrNull { (_, bounds) -> bounds.contains(position) }
-                            val currentFolder = addresses.firstOrNull { it.id == addressId }?.folderId
-                            if (target != null && target.key != currentFolder) {
-                                onMoveAddressToFolder(addressId, target.key)
-                                true
-                            } else false
-                        },
-                    )
+                    ) { entry ->
+                        if (entry.isFolder) children.firstOrNull { it.id == entry.id }?.let { folder ->
+                            FolderWalletCard(folder, folders, onRenameFolder, onMoveFolder, onDeleteFolder, onSetFolderColor)
+                        } else visibleAddresses.firstOrNull { it.id == entry.id }?.let { address ->
+                            CardTemplatePreview(CardTemplateRegistry.findOrDefault(address.cardTemplateId),
+                                nickname = address.nickname, modifier = Modifier.fillMaxWidth(), shadowElevation = 0.dp)
+                        }
+                    }
                 }
             }
         }
@@ -511,6 +525,9 @@ fun AddressDetailScreen(
     operationMessage: AddressOperationMessage,
     onCopy: (UUID, AddressCopyPart) -> Unit,
     onEdit: (UUID) -> Unit,
+    folders: List<VaultFolderUiModel>,
+    currentFolderId: UUID?,
+    onMove: (UUID, UUID?) -> Unit,
     onDelete: (UUID) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -576,6 +593,7 @@ fun AddressDetailScreen(
                         onShowBackChanged = { showBack = it },
                     )
                     AddressOperationNotice(operationMessage)
+                    RecordMoveButton(folders, currentFolderId, onMove = { destination -> onMove(state.recordId, destination) })
                     AnimatedVisibility(
                         visible = showBack,
                         enter = fadeIn(animationSpec = tween(durationMillis = 220, delayMillis = 120)),
@@ -629,10 +647,9 @@ private fun FlippableAddressDetail(
     )
     val toggle = { onShowBackChanged(!showBack) }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(ADDRESS_CARD_ASPECT_RATIO)
             .graphicsLayer {
                 rotationY = rotation
                 scaleX = flipScale
@@ -652,17 +669,20 @@ private fun FlippableAddressDetail(
                 }
             },
     ) {
+        val minimumHeight = maxWidth / ADDRESS_DETAIL_CARD_ASPECT_RATIO
         if (rotation <= 90f) {
             CardTemplatePreview(
                 template = template,
                 nickname = address.nickname,
                 modifier = Modifier.fillMaxWidth(),
                 shadowElevation = 0.dp,
+                aspectRatio = ADDRESS_DETAIL_CARD_ASPECT_RATIO,
             )
         } else {
             AddressBackCard(
                 address = address,
                 onCopy = onCopy,
+                minimumHeight = minimumHeight,
                 modifier = Modifier.graphicsLayer { rotationY = 180f },
             )
         }
@@ -673,73 +693,84 @@ private fun FlippableAddressDetail(
 private fun AddressBackCard(
     address: AddressDetailUiModel,
     onCopy: (AddressCopyPart) -> Unit,
+    minimumHeight: Dp,
     modifier: Modifier = Modifier,
 ) {
     val template = CardTemplateRegistry.findOrDefault(address.cardTemplateId)
     val textColor = template.nicknameColor.color ?: template.foreground
     Box(
         modifier = modifier
-            .fillMaxSize()
+            .fillMaxWidth()
+            .heightIn(min = minimumHeight)
             .clip(MaterialTheme.shapes.extraLarge)
             .background(
                 Brush.linearGradient(listOf(template.gradientStart, template.gradientEnd)),
             )
             .padding(horizontal = 22.dp, vertical = 18.dp),
     ) {
-        Surface(
-            onClick = { onCopy(AddressCopyPart.Complete) },
-            modifier = Modifier.align(Alignment.TopEnd),
-            shape = CircleShape,
-            color = Color.Black.copy(alpha = 0.18f),
-            contentColor = textColor,
-        ) {
-            Text(
-                text = stringResource(R.string.address_copy_all),
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Column(
-            modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(1.dp),
-        ) {
-            AddressCopyLine(
-                text = address.detailedAddress,
-                copyLabel = stringResource(R.string.address_copy_detail),
-                textColor = textColor,
-                emphasized = true,
-                maxLines = 3,
-                onClick = { onCopy(AddressCopyPart.DetailedAddress) },
-            )
-            address.other.takeIf(String::isNotBlank)?.let { other ->
-                AddressCopyLine(
-                    text = other,
-                    copyLabel = stringResource(R.string.address_copy_other),
-                    textColor = textColor,
-                    maxLines = 2,
-                    onClick = { onCopy(AddressCopyPart.Other) },
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                onClick = { onCopy(AddressCopyPart.Complete) },
+                modifier = Modifier.align(Alignment.End),
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.18f),
+                contentColor = textColor,
+            ) {
+                Text(
+                    text = stringResource(R.string.address_copy_all),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
                 )
             }
-            AddressCopyLine(
-                text = address.city,
-                copyLabel = stringResource(R.string.address_copy_city),
-                textColor = textColor,
-                onClick = { onCopy(AddressCopyPart.City) },
-            )
-            AddressCopyLine(
-                text = address.postalCode,
-                copyLabel = stringResource(R.string.address_copy_postal_code),
-                textColor = textColor,
-                onClick = { onCopy(AddressCopyPart.PostalCode) },
-            )
-            address.country.takeIf(String::isNotBlank)?.let { country ->
-                AddressCopyLine(
-                    text = country,
-                    copyLabel = stringResource(R.string.address_copy_country),
-                    textColor = textColor,
-                    onClick = { onCopy(AddressCopyPart.Country) },
-                )
+            Spacer(Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = (minimumHeight - 86.dp).coerceAtLeast(0.dp)),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    AddressCopyLine(
+                        text = address.detailedAddress,
+                        copyLabel = stringResource(R.string.address_copy_detail),
+                        textColor = textColor,
+                        emphasized = true,
+                        onClick = { onCopy(AddressCopyPart.DetailedAddress) },
+                    )
+                    address.other.takeIf(String::isNotBlank)?.let { other ->
+                        AddressCopyLine(
+                            text = other,
+                            copyLabel = stringResource(R.string.address_copy_other),
+                            textColor = textColor,
+                            onClick = { onCopy(AddressCopyPart.Other) },
+                        )
+                    }
+                    AddressCopyLine(
+                        text = address.city,
+                        copyLabel = stringResource(R.string.address_copy_city),
+                        textColor = textColor,
+                        onClick = { onCopy(AddressCopyPart.City) },
+                    )
+                    AddressCopyLine(
+                        text = address.postalCode,
+                        copyLabel = stringResource(R.string.address_copy_postal_code),
+                        textColor = textColor,
+                        onClick = { onCopy(AddressCopyPart.PostalCode) },
+                    )
+                    address.country.takeIf(String::isNotBlank)?.let { country ->
+                        AddressCopyLine(
+                            text = country,
+                            copyLabel = stringResource(R.string.address_copy_country),
+                            textColor = textColor,
+                            onClick = { onCopy(AddressCopyPart.Country) },
+                        )
+                    }
+                }
             }
         }
     }
@@ -752,7 +783,6 @@ private fun AddressCopyLine(
     textColor: Color,
     onClick: () -> Unit,
     emphasized: Boolean = false,
-    maxLines: Int = 1,
 ) {
     Row(
         modifier = Modifier
@@ -779,14 +809,13 @@ private fun AddressCopyLine(
                 MaterialTheme.typography.bodyMedium
             },
             fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Medium,
-            maxLines = maxLines,
-            overflow = TextOverflow.Ellipsis,
+            softWrap = true,
         )
         Text(
             text = "⧉",
             color = textColor.copy(alpha = 0.58f),
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(start = 10.dp),
+            modifier = Modifier.padding(start = 10.dp).widthIn(min = 20.dp),
         )
     }
 }
@@ -843,6 +872,7 @@ private fun RoundBackButton(onBack: () -> Unit) {
 }
 
 private const val ADDRESS_CARD_ASPECT_RATIO = 1.586f
+private const val ADDRESS_DETAIL_CARD_ASPECT_RATIO = 1.25f
 
 internal data class AddressFormLayout(
     val previewVerticalPaddingDp: Float,

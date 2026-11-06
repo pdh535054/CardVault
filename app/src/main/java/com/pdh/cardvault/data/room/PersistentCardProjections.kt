@@ -12,6 +12,7 @@ data class PersistentCardListItem(
     val issuerName: String,
     val cardTemplateId: String,
     val cardNetwork: CardNetwork?,
+    val lastFour: String,
     val folderId: UUID? = null,
 ) {
     override fun toString(): String = "PersistentCardListItem(sensitiveFields=redacted)"
@@ -97,16 +98,22 @@ data class PersistentVaultFolder(
     val id: UUID,
     val name: String,
     val kind: VaultFolderKind,
+    val parentFolderId: UUID? = null,
+    val colorRgb: Int = com.pdh.cardvault.wallet.FolderAppearance.DEFAULT_COLOR_RGB,
 ) {
     override fun toString(): String = "PersistentVaultFolder(name=redacted, kind=$kind)"
 }
 
 interface PersistentVaultFolderRepository {
+    suspend fun getWalletOrder(kind: VaultFolderKind): List<String>
+    suspend fun reorderWalletEntries(kind: VaultFolderKind, orderedKeys: List<String>)
     suspend fun getFolders(kind: VaultFolderKind): List<PersistentVaultFolder>
     suspend fun getFolderOrder(kind: VaultFolderKind): List<UUID?>
     suspend fun reorderFolders(kind: VaultFolderKind, orderedIds: List<UUID?>)
-    suspend fun createFolder(kind: VaultFolderKind, name: String): UUID
+    suspend fun createFolder(kind: VaultFolderKind, name: String, parentFolderId: UUID? = null): UUID
     suspend fun renameFolder(id: UUID, name: String): Boolean
+    suspend fun setFolderColor(id: UUID, colorRgb: Int): Boolean
+    suspend fun moveFolder(id: UUID, parentFolderId: UUID?): Boolean
     suspend fun deleteFolder(id: UUID): Boolean
     suspend fun moveCardToFolder(cardId: UUID, folderId: UUID?): Boolean
     suspend fun moveAddressToFolder(addressId: UUID, folderId: UUID?): Boolean

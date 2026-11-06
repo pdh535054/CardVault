@@ -7,6 +7,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -106,8 +108,10 @@ private fun HomeChoice(symbol: String, title: String, subtitle: String, modifier
 fun AddressWalletScreen(controller: DesktopAppController, modifier: Modifier = Modifier) {
     var deleteConfirmation by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val folderBounds = remember { mutableMapOf<String?, Rect>() }
     val visibleAddresses = controller.addresses.filter { it.folderId == controller.selectedAddressFolderId }
+    val children = controller.addressFolders.filter { it.parentFolderId == controller.selectedAddressFolderId }
+    val entries = orderedDesktopWalletEntries(controller.addressWalletOrder,
+        children.map { DesktopWalletEntry(it.id, true) } + visibleAddresses.map { DesktopWalletEntry(it.id, false) })
     Row(modifier.fillMaxSize().padding(32.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(470.dp).fillMaxHeight()) {
             Row(
@@ -130,39 +134,39 @@ fun AddressWalletScreen(controller: DesktopAppController, modifier: Modifier = M
                 ) { Text("＋", fontSize = 20.sp) }
             }
             Spacer(Modifier.height(28.dp))
-            DesktopFolderBar(
-                folders = controller.addressFolders,
-                folderOrder = controller.addressFolderOrder,
-                selectedId = controller.selectedAddressFolderId,
-                unfiledCount = controller.addresses.count { it.folderId == null },
-                itemCount = { folderId -> controller.addresses.count { it.folderId == folderId } },
-                onSelect = controller::selectAddressFolder,
-                onCreate = { controller.createFolder(it, com.pdh.cardvault.desktop.model.DesktopFolderKind.ADDRESSES) },
-                onRename = controller::renameFolder,
-                onDelete = controller::deleteFolder,
-                onReorder = { controller.reorderFolders(com.pdh.cardvault.desktop.model.DesktopFolderKind.ADDRESSES, it) },
-                onBounds = { id, bounds -> folderBounds[id] = bounds },
-            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                val selectedFolder = controller.addressFolders.firstOrNull { it.id == controller.selectedAddressFolderId }
+                TextButton(enabled = selectedFolder != null,
+                    onClick = { controller.selectAddressFolder(selectedFolder?.parentFolderId) },
+                    modifier = Modifier.weight(1f)) { Text(selectedFolder?.let { "‹ ${desktopFolderPath(controller.addressFolders, it.id)}" } ?: "全部分类", maxLines = 1) }
+                DesktopNewFolderButton { name -> controller.createFolder(name, com.pdh.cardvault.desktop.model.DesktopFolderKind.ADDRESSES, controller.selectedAddressFolderId) }
+            }
             Spacer(Modifier.height(16.dp))
-            if (visibleAddresses.isEmpty()) {
+            Text("拖动排序；在文件夹上停稳，显示「松手移入」后松手归档", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (entries.isEmpty()) {
                 EmptyAddresses(controller)
             } else {
-                AddressStack(
-                    addresses = visibleAddresses,
-                    selectedId = controller.selectedAddressId,
-                    onSelect = controller::selectAddress,
-                    onMove = { id, target ->
-                        visibleAddresses.getOrNull(target)?.id?.let { targetId ->
-                            controller.moveAddress(id, controller.addresses.indexOfFirst { it.id == targetId })
-                        }
-                    },
-                    onDrop = { addressId, position ->
-                        val target = folderBounds.entries.firstOrNull { (_, bounds) -> bounds.contains(position) }
-                        val current = controller.addresses.firstOrNull { it.id == addressId }?.folderId
-                        target != null && target.key != current && controller.moveAddressToFolder(addressId, target.key)
+                DesktopMixedWalletStack(
+                    entries = entries,
+                    onOpen = { if (it.isFolder) controller.selectAddressFolder(it.id) else controller.selectAddress(it.id) },
+                    onReorder = { controller.reorderWalletEntries(com.pdh.cardvault.desktop.model.DesktopFolderKind.ADDRESSES, it) },
+                    folderName = { id -> children.firstOrNull { it.id == id }?.name.orEmpty() },
+                    canMoveIntoFolder = { entry, destination -> canDropDesktopWalletEntry(entry, destination, controller.addressFolders) },
+                    onMoveIntoFolder = { entry, folder ->
+                        if (entry.isFolder) controller.moveFolder(entry.id, folder)
+                        else controller.moveAddressToFolder(entry.id, folder)
                     },
                     modifier = Modifier.fillMaxSize(),
-                )
+                ) { entry ->
+                    if (entry.isFolder) children.firstOrNull { it.id == entry.id }?.let { folder ->
+                        DesktopFolderWalletCard(folder, controller.addressFolders,
+                            countDesktopFolderTreeItems(controller.addressFolders, folder.id, controller.addresses.map { it.folderId }),
+                            controller::renameFolder, controller::moveFolder, controller::deleteFolder, controller::setFolderColor)
+                    } else visibleAddresses.firstOrNull { it.id == entry.id }?.let { address ->
+                        AddressFace(address, compact = true, modifier = Modifier.fillMaxWidth())
+                    }
+                }
             }
         }
         Box(
@@ -175,6 +179,11 @@ fun AddressWalletScreen(controller: DesktopAppController, modifier: Modifier = M
                     concealmentEpoch = controller.concealmentEpoch,
                     authenticating = controller.authenticatingAction != null,
                     onEdit = { scope.launch { controller.startEditAddress(address.id) } },
+                    moveControl = {
+                        DesktopRecordMoveButton(controller.addressFolders, address.folderId,
+                            enabled = controller.authenticatingAction == null,
+                            onMove = { controller.moveAddressToFolder(address.id, it) })
+                    },
                     onDelete = { deleteConfirmation = true },
                     onCopy = { part -> controller.copyAddress(address.id, part) },
                 )
@@ -269,6 +278,7 @@ private fun AddressDetailPanel(
     concealmentEpoch: Long,
     authenticating: Boolean,
     onEdit: () -> Unit,
+    moveControl: @Composable () -> Unit,
     onDelete: () -> Unit,
     onCopy: (DesktopAddressCopyPart) -> Unit,
 ) {
@@ -281,13 +291,13 @@ private fun AddressDetailPanel(
     LaunchedEffect(concealmentEpoch) {
         flipped = false
     }
-    Column(Modifier.fillMaxSize().padding(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(address.nickname, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+            Text(address.nickname, modifier = Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
             Row {
                 TextButton(onClick = onEdit, enabled = !authenticating) { Text("编辑") }
                 TextButton(onClick = onDelete, enabled = !authenticating) {
@@ -308,6 +318,8 @@ private fun AddressDetailPanel(
             color = Color.White.copy(alpha = 0.36f),
             fontSize = 11.sp,
         )
+        Spacer(Modifier.height(12.dp))
+        moveControl()
     }
 }
 

@@ -360,6 +360,8 @@ private fun DesktopVaultSnapshot.toCoreSnapshot(): SyncSnapshot {
                         DesktopFolderKind.ADDRESSES -> FolderCollectionKind.ADDRESSES
                     },
                     name = folder.name,
+                    parentFolderId = folder.parentFolderId,
+                    colorRgb = folder.colorRgb,
                 ),
                 createdAtEpochMillis = folder.createdAtEpochMillis,
                 updatedAtEpochMillis = folder.updatedAtEpochMillis,
@@ -462,6 +464,8 @@ private fun SyncSnapshot.toDesktopSnapshot(revision: Long, base: DesktopSyncStat
             },
             createdAtEpochMillis = value.createdAtEpochMillis,
             updatedAtEpochMillis = value.updatedAtEpochMillis,
+            parentFolderId = value.payload.parentFolderId,
+            colorRgb = value.payload.colorRgb,
         )
     }
     val folderVectors = folderSnapshot?.records.orEmpty()
