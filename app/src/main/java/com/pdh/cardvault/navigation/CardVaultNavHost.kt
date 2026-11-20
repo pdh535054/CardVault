@@ -1,21 +1,25 @@
 package com.pdh.cardvault.navigation
 
+import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.navigation.NamedNavArgument
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavType
 import androidx.navigation.NavHostController
 import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import com.pdh.cardvault.InboundTransferRequest
 import com.pdh.cardvault.presentation.CardFormField
 import com.pdh.cardvault.presentation.AddressFormField
 import com.pdh.cardvault.presentation.AddressCopyPart
@@ -25,6 +29,9 @@ import com.pdh.cardvault.presentation.CardEditUiState
 import com.pdh.cardvault.presentation.CardNavigationEvent
 import com.pdh.cardvault.presentation.CardsUiState
 import com.pdh.cardvault.presentation.VaultTransferUiState
+import com.pdh.cardvault.presentation.findPossibleDuplicateCards
+import com.pdh.cardvault.wallet.BackupReminderPolicy
+import com.pdh.cardvault.ui.theme.CardVaultMotion
 import com.pdh.cardvault.security.auth.AuthenticationAction
 import com.pdh.cardvault.security.auth.AuthenticationOutcome
 import com.pdh.cardvault.ui.screen.AboutPrivacyScreen
@@ -45,9 +52,12 @@ import com.pdh.cardvault.ui.screen.VaultHomeScreen
 import java.util.UUID
 
 @Composable
-fun CardVaultNavHost(
+internal fun CardVaultNavHost(
     navController: NavHostController,
     showSecurityNoticeAtLaunch: Boolean,
+    showSecurityNotice: Boolean,
+    inboundTransferRequest: InboundTransferRequest?,
+    onInboundTransfer: (InboundTransferRequest) -> Boolean,
     onSecurityNoticeAcknowledged: () -> Unit,
     startupAuthenticationEnabled: Boolean,
     authenticationInProgress: Boolean,
@@ -57,9 +67,14 @@ fun CardVaultNavHost(
     onPrepareVaultExport: () -> Unit,
     onRotateVaultSyncKey: () -> Unit,
     onSharePreparedVaultExport: () -> Unit,
+    onSavePreparedVaultExport: (String) -> Unit,
     onCopyVaultPairingCode: () -> Unit,
     onVaultImportUriSelected: (String) -> Unit,
+    onVaultImportPickerUnavailable: () -> Unit,
+    onVaultSavePickerUnavailable: () -> Unit,
     onVaultPairingCodeChanged: (String) -> Unit,
+    onVaultPastePairingCode: (String?) -> Unit,
+    onSnoozeBackupReminder: () -> Unit,
     onConfirmVaultPairingImport: () -> Unit,
     cardsUiState: CardsUiState,
     addressesUiState: AddressesUiState,
@@ -99,7 +114,7 @@ fun CardVaultNavHost(
     onClearCardDetail: () -> Unit,
     onCardsReordered: (List<UUID>) -> Unit,
     onCardFolderSelected: (UUID?) -> Unit,
-    onCardLastFourSearchQueryChanged: (String) -> Unit,
+    onCardSearchQueryChanged: (String) -> Unit,
     onCardFoldersReordered: (List<UUID?>) -> Unit,
     onCardWalletReordered: (List<String>) -> Unit,
     onCreateCardFolder: (String) -> Unit,
@@ -166,35 +181,43 @@ fun CardVaultNavHost(
         startDestination = startDestination,
         modifier = modifier,
         enterTransition = {
-            fadeIn(animationSpec = tween(durationMillis = 190)) +
+            fadeIn(animationSpec = CardVaultMotion.navEnterFade()) +
                 slideInHorizontally(
-                    animationSpec = tween(durationMillis = 240),
-                    initialOffsetX = { fullWidth -> fullWidth / 12 },
+                    animationSpec = CardVaultMotion.navSlide(),
+                    initialOffsetX = { fullWidth -> fullWidth / 14 },
+                ) +
+                scaleIn(
+                    animationSpec = CardVaultMotion.navSlide(),
+                    initialScale = 0.98f,
                 )
         },
         exitTransition = {
-            fadeOut(animationSpec = tween(durationMillis = 130)) +
+            fadeOut(animationSpec = CardVaultMotion.navExitFade()) +
                 scaleOut(
-                    animationSpec = tween(durationMillis = 180),
-                    targetScale = 0.985f,
+                    animationSpec = CardVaultMotion.navSlide(),
+                    targetScale = 0.968f,
                 )
         },
         popEnterTransition = {
-            fadeIn(animationSpec = tween(durationMillis = 180)) +
+            fadeIn(animationSpec = CardVaultMotion.navEnterFade()) +
                 scaleIn(
-                    animationSpec = tween(durationMillis = 210),
-                    initialScale = 0.985f,
+                    animationSpec = CardVaultMotion.navPopSlide(),
+                    initialScale = 0.968f,
                 )
         },
         popExitTransition = {
-            fadeOut(animationSpec = tween(durationMillis = 150)) +
+            fadeOut(animationSpec = CardVaultMotion.navExitFade()) +
                 slideOutHorizontally(
-                    animationSpec = tween(durationMillis = 220),
-                    targetOffsetX = { fullWidth -> fullWidth / 14 },
+                    animationSpec = CardVaultMotion.navPopSlide(),
+                    targetOffsetX = { fullWidth -> fullWidth / 12 },
+                ) +
+                scaleOut(
+                    animationSpec = CardVaultMotion.navPopSlide(),
+                    targetScale = 0.98f,
                 )
         },
     ) {
-        composable(CardVaultDestination.SecurityNotice.route) {
+        screen(CardVaultDestination.SecurityNotice.route) {
             SecurityNoticeScreen(
                 onContinue = {
                     onSecurityNoticeAcknowledged()
@@ -207,7 +230,7 @@ fun CardVaultNavHost(
                 },
             )
         }
-        composable(CardVaultDestination.Home.route) {
+        screen(CardVaultDestination.Home.route) {
             VaultHomeScreen(
                 onOpenCards = {
                     navController.navigate(CardVaultDestination.Cards.route) {
@@ -224,16 +247,32 @@ fun CardVaultNavHost(
                         launchSingleTop = true
                     }
                 },
+                cardCount = cardsUiState.cards.size,
+                addressCount = addressesUiState.addresses.size,
+                backupReminder = BackupReminderPolicy.evaluate(
+                    hasVaultData = cardsUiState.cards.isNotEmpty() ||
+                        addressesUiState.addresses.isNotEmpty(),
+                    lastSyncAtEpochMillis = vaultTransferUiState.lastSyncAtEpochMillis,
+                    snoozedUntilEpochMillis =
+                        vaultTransferUiState.backupReminderSnoozedUntilEpochMillis,
+                    nowEpochMillis = System.currentTimeMillis(),
+                ),
+                onOpenBackup = {
+                    navController.navigate(CardVaultDestination.VaultTransfer.route) {
+                        launchSingleTop = true
+                    }
+                },
+                onSnoozeBackupReminder = onSnoozeBackupReminder,
             )
         }
-        composable(CardVaultDestination.Cards.route) {
+        screen(CardVaultDestination.Cards.route) {
             CardListScreen(
                 cards = cardsUiState.cards,
                 folders = cardsUiState.folders,
                 folderOrder = cardsUiState.folderOrder,
                 walletOrder = cardsUiState.walletOrder,
                 selectedFolderId = cardsUiState.selectedFolderId,
-                lastFourSearchQuery = cardsUiState.lastFourSearchQuery,
+                cardSearchQuery = cardsUiState.cardSearchQuery,
                 sortingInProgress = cardsUiState.sortingInProgress,
                 operationMessage = cardsUiState.operationMessage,
                 onBackToHome = navController::popBackStack,
@@ -250,7 +289,7 @@ fun CardVaultNavHost(
                     navController.navigate(CardVaultDestination.cardDetailRoute(recordId))
                 },
                 onFolderSelected = onCardFolderSelected,
-                onLastFourSearchQueryChanged = onCardLastFourSearchQueryChanged,
+                onCardSearchQueryChanged = onCardSearchQueryChanged,
                 onCardsReordered = onCardsReordered,
                 onFoldersReordered = onCardFoldersReordered,
                 onWalletEntriesReordered = onCardWalletReordered,
@@ -262,7 +301,7 @@ fun CardVaultNavHost(
                 onDeleteFolder = onDeleteCardFolder,
             )
         }
-        composable(CardVaultDestination.AddCard.route) {
+        screen(CardVaultDestination.AddCard.route) {
             val leaveForm = {
                 onClearCardForm()
                 navController.popBackStack()
@@ -280,9 +319,13 @@ fun CardVaultNavHost(
                     onSubmitCard()
                 },
                 onBack = leaveForm,
+                duplicateCardNames = findPossibleDuplicateCards(
+                    cardNumber = cardsUiState.form.cardNumber,
+                    existingCards = cardsUiState.cards,
+                ).map { it.nickname },
             )
         }
-        composable(
+        screen(
             route = CardVaultDestination.CardDetail.route,
             arguments = listOf(
                 navArgument(CardVaultDestination.RECORD_ID_ARGUMENT) {
@@ -324,7 +367,7 @@ fun CardVaultNavHost(
                 onBack = navController::popBackStack,
             )
         }
-        composable(
+        screen(
             route = CardVaultDestination.EditCard.route,
             arguments = listOf(
                 navArgument(CardVaultDestination.RECORD_ID_ARGUMENT) {
@@ -353,6 +396,11 @@ fun CardVaultNavHost(
                         onClearEditDraft()
                         navController.popBackStack()
                     },
+                    duplicateCardNames = findPossibleDuplicateCards(
+                        cardNumber = ready.form.cardNumber,
+                        existingCards = cardsUiState.cards,
+                        excludeId = recordId,
+                    ).map { it.nickname },
                 )
             } else {
                 EditCardStatusScreen(
@@ -361,7 +409,7 @@ fun CardVaultNavHost(
                 )
             }
         }
-        composable(CardVaultDestination.Settings.route) {
+        screen(CardVaultDestination.Settings.route) {
             SettingsScreen(
                 startupAuthenticationEnabled = startupAuthenticationEnabled,
                 authenticationInProgress = authenticationInProgress,
@@ -378,26 +426,30 @@ fun CardVaultNavHost(
                 },
             )
         }
-        composable(CardVaultDestination.VaultTransfer.route) {
+        screen(CardVaultDestination.VaultTransfer.route) {
             VaultTransferScreen(
                 state = vaultTransferUiState,
                 onBack = navController::popBackStack,
                 onPrepareExport = onPrepareVaultExport,
                 onRotateSyncKey = onRotateVaultSyncKey,
                 onSharePreparedExport = onSharePreparedVaultExport,
+                onSavePreparedExport = onSavePreparedVaultExport,
                 onCopyPairingCode = onCopyVaultPairingCode,
                 onImportUriSelected = onVaultImportUriSelected,
+                onImportPickerUnavailable = onVaultImportPickerUnavailable,
+                onSavePickerUnavailable = onVaultSavePickerUnavailable,
                 onPairingCodeChanged = onVaultPairingCodeChanged,
+                onPastePairingCode = onVaultPastePairingCode,
                 onConfirmPairingImport = onConfirmVaultPairingImport,
             )
         }
-        composable(CardVaultDestination.AboutPrivacy.route) {
+        screen(CardVaultDestination.AboutPrivacy.route) {
             AboutPrivacyScreen(onBack = navController::popBackStack)
         }
-        composable(CardVaultDestination.TemplateGallery.route) {
+        screen(CardVaultDestination.TemplateGallery.route) {
             TemplateGalleryScreen(onBack = navController::popBackStack)
         }
-        composable(CardVaultDestination.Addresses.route) {
+        screen(CardVaultDestination.Addresses.route) {
             AddressListScreen(
                 addresses = addressesUiState.addresses,
                 folders = addressesUiState.folders,
@@ -425,7 +477,7 @@ fun CardVaultNavHost(
                 onDeleteFolder = onDeleteAddressFolder,
             )
         }
-        composable(CardVaultDestination.AddAddress.route) {
+        screen(CardVaultDestination.AddAddress.route) {
             val leaveForm = {
                 onClearAddressForm()
                 navController.popBackStack()
@@ -439,7 +491,7 @@ fun CardVaultNavHost(
                 onBack = leaveForm,
             )
         }
-        composable(
+        screen(
             route = CardVaultDestination.AddressDetail.route,
             arguments = listOf(
                 navArgument(CardVaultDestination.RECORD_ID_ARGUMENT) {
@@ -471,7 +523,7 @@ fun CardVaultNavHost(
                 onBack = navController::popBackStack,
             )
         }
-        composable(
+        screen(
             route = CardVaultDestination.EditAddress.route,
             arguments = listOf(
                 navArgument(CardVaultDestination.RECORD_ID_ARGUMENT) {
@@ -496,4 +548,25 @@ fun CardVaultNavHost(
             )
         }
     }
+
+    // A file opened from WeChat / QQ / a file manager is handled once the vault is visible and
+    // the first-run security notice has been acknowledged. If a transfer step is still running
+    // the request stays pending and is retried on the next transfer state change.
+    LaunchedEffect(inboundTransferRequest?.id, showSecurityNotice, vaultTransferUiState) {
+        val request = inboundTransferRequest ?: return@LaunchedEffect
+        if (showSecurityNotice) return@LaunchedEffect
+        if (onInboundTransfer(request)) {
+            navController.navigate(CardVaultDestination.VaultTransfer.route) {
+                launchSingleTop = true
+            }
+        }
+    }
+}
+
+private fun NavGraphBuilder.screen(
+    route: String,
+    arguments: List<NamedNavArgument> = emptyList(),
+    content: @Composable AnimatedContentScope.(NavBackStackEntry) -> Unit,
+) {
+    composable(route = route, arguments = arguments, content = content)
 }

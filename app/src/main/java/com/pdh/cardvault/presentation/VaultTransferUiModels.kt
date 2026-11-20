@@ -1,5 +1,6 @@
 package com.pdh.cardvault.presentation
 
+import androidx.compose.runtime.Immutable
 import com.pdh.cardvault.security.auth.AuthenticationAction
 
 enum class VaultPairingState {
@@ -29,6 +30,7 @@ data class VaultTransferAuthenticationRequest(
     override fun toString(): String = "VaultTransferAuthenticationRequest(redacted)"
 }
 
+@Immutable
 data class VaultTransferUiState(
     val pairingState: VaultPairingState = VaultPairingState.Unpaired,
     val keyEpoch: Int? = null,
@@ -40,6 +42,8 @@ data class VaultTransferUiState(
     val message: VaultTransferMessage? = null,
     val authenticationRequest: VaultTransferAuthenticationRequest? = null,
     val importedSnapshotRevision: Long = 0L,
+    val lastSyncAtEpochMillis: Long? = null,
+    val backupReminderSnoozedUntilEpochMillis: Long? = null,
 ) {
     override fun toString(): String =
         "VaultTransferUiState(pairing=$pairingState, keyEpoch=$keyEpoch, " +

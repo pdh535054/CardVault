@@ -126,7 +126,15 @@ fun AddressEditorScreen(controller: DesktopAppController, modifier: Modifier = M
                     )
 
                     WithDesktopUiFontSize {
-                        ChoiceTitle("卡面颜色")
+                        ChoiceTitle("精选预设风格（点击一键套用，下方可自由微调）")
+                        PresetStyleRow(
+                            currentStyle = draft.style,
+                            onSelectPreset = { presetStyle ->
+                                controller.updateAddressDraft { it.copy(style = presetStyle) }
+                            },
+                        )
+
+                        ChoiceTitle("卡面颜色（28 款预设 + 自由调色）")
                         Row(
                             Modifier.fillMaxWidth().dragScrollableHorizontally(paletteScrollState),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -160,12 +168,16 @@ fun AddressEditorScreen(controller: DesktopAppController, modifier: Modifier = M
                                 onClick = { colorPickerTarget = AddressColorTarget.Cover },
                             )
                         }
-                        ChoiceTitle("花纹")
-                        ChoiceRow(CardPattern.entries, draft.style.pattern, CardPattern::displayName) { pattern ->
-                            controller.updateAddressDraft {
-                                it.copy(style = it.style.copy(pattern = pattern, sourceTemplateId = null))
-                            }
-                        }
+                        ChoiceTitle("花纹与图案（30 款）")
+                        PatternSwatchRow(
+                            baseStyle = draft.style,
+                            selected = draft.style.pattern,
+                            onSelect = { pattern ->
+                                controller.updateAddressDraft {
+                                    it.copy(style = it.style.copy(pattern = pattern, sourceTemplateId = null))
+                                }
+                            },
+                        )
                         ChoiceTitle("名称版式")
                         ChoiceRow(NicknameTypography.entries, draft.style.typography, NicknameTypography::displayName) { type ->
                             controller.updateAddressDraft {
@@ -177,7 +189,7 @@ fun AddressEditorScreen(controller: DesktopAppController, modifier: Modifier = M
                             Modifier.fillMaxWidth().dragScrollableHorizontally(nicknameColorScrollState),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            nicknameColors.forEach { argb ->
+                            CoverPalettes.nicknameSwatches.forEach { argb ->
                                 Box(
                                     Modifier.size(36.dp).clip(CircleShape).background(Color(argb))
                                         .border(
@@ -240,12 +252,6 @@ fun AddressEditorScreen(controller: DesktopAppController, modifier: Modifier = M
 }
 
 private enum class AddressColorTarget { Cover, Nickname }
-
-private val nicknameColors = listOf(
-    0xFFFFF8E8.toInt(), 0xFF111318.toInt(), 0xFFFFD166.toInt(),
-    0xFFE3EAF2.toInt(), 0xFF87D9FF.toInt(), 0xFF8CE8C5.toInt(),
-    0xFFFF9DB6.toInt(), 0xFFD7B7FF.toInt(), 0xFFFFA080.toInt(),
-)
 
 private fun previewAddress(draft: AddressDraft): DesktopAddress = DesktopAddress(
     id = draft.id ?: UUID(0L, 1L).toString(),

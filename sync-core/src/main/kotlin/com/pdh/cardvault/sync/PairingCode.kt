@@ -87,4 +87,30 @@ object PairingCode {
 
     private fun invalidPairingCode(): Nothing =
         throw SyncProtocolException(SyncErrorCode.INVALID_PAIRING_CODE)
+
+    private val EMBEDDED_CODE = Regex(
+        "CVP1(?:[\\s-]*[A-Z2-7]){$ENCODED_CHARS}(?![A-Z2-7])",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * Finds a pairing code inside arbitrary pasted text (for example a chat message such as
+     * "配对码：CVP1-ABCDE-…"). Returns the canonical upper-case code, or null if none is found.
+     * Only the code's shape is checked here; [decode] still validates it.
+     */
+    fun findIn(text: String?): String? {
+        if (text.isNullOrBlank()) return null
+        val match = EMBEDDED_CODE.find(text) ?: return null
+        val compact = match.value.substring(PREFIX.length - 1)
+            .filterNot { it == '-' || it.isWhitespace() }
+            .uppercase(Locale.ROOT)
+        if (compact.length != ENCODED_CHARS) return null
+        return PREFIX + listOf(
+            compact.substring(0, 5),
+            compact.substring(5, 10),
+            compact.substring(10, 15),
+            compact.substring(15, 20),
+            compact.substring(20, 26),
+        ).joinToString("-")
+    }
 }

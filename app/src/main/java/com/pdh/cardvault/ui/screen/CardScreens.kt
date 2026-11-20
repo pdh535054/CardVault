@@ -1,12 +1,8 @@
 package com.pdh.cardvault.ui.screen
 
 import androidx.activity.compose.BackHandler
-
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +14,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -39,22 +40,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
@@ -66,13 +65,16 @@ import com.pdh.cardvault.presentation.CardListItemUiModel
 import com.pdh.cardvault.presentation.CardOperationMessage
 import com.pdh.cardvault.presentation.RevealedCardSecretsUiState
 import com.pdh.cardvault.presentation.VaultFolderUiModel
+import com.pdh.cardvault.presentation.cardMatchesSearch
+import com.pdh.cardvault.ui.card.CardTemplatePreview
+import com.pdh.cardvault.ui.card.CardTemplateRegistry
 import com.pdh.cardvault.ui.card.CardWalletStack
 import com.pdh.cardvault.ui.card.FlippableMaskedCardDetail
 import com.pdh.cardvault.ui.card.MixedWalletStack
 import com.pdh.cardvault.ui.card.WalletStackEntry
 import com.pdh.cardvault.ui.card.orderedWalletEntries
-import com.pdh.cardvault.ui.card.CardTemplatePreview
-import com.pdh.cardvault.ui.card.CardTemplateRegistry
+import com.pdh.cardvault.ui.theme.pressScale
+import com.pdh.cardvault.ui.theme.specularRim
 import java.util.UUID
 import kotlinx.coroutines.launch
 
@@ -84,7 +86,7 @@ fun CardListScreen(
     folderOrder: List<UUID?>,
     walletOrder: List<String>,
     selectedFolderId: UUID?,
-    lastFourSearchQuery: String,
+    cardSearchQuery: String,
     sortingInProgress: Boolean,
     operationMessage: CardOperationMessage,
     onBackToHome: () -> Unit,
@@ -93,7 +95,7 @@ fun CardListScreen(
     onOpenTemplates: () -> Unit,
     onCardSelected: (UUID) -> Unit,
     onFolderSelected: (UUID?) -> Unit,
-    onLastFourSearchQueryChanged: (String) -> Unit,
+    onCardSearchQueryChanged: (String) -> Unit,
     onCardsReordered: (List<UUID>) -> Unit,
     onFoldersReordered: (List<UUID?>) -> Unit,
     onWalletEntriesReordered: (List<String>) -> Unit,
@@ -107,7 +109,7 @@ fun CardListScreen(
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val visibleCards = visibleCardsForWallet(cards, selectedFolderId, lastFourSearchQuery)
+    val visibleCards = visibleCardsForWallet(cards, selectedFolderId, cardSearchQuery)
     val children = folders.filter { it.parentFolderId == selectedFolderId }
     val entries = orderedWalletEntries(walletOrder,
         children.map { WalletStackEntry(it.id, true) } + visibleCards.map { WalletStackEntry(it.id, false) })
@@ -145,33 +147,24 @@ fun CardListScreen(
                 }
             }
 
-            item(key = "last-four-search") {
-                OutlinedTextField(
-                    value = lastFourSearchQuery,
+            item(key = "card-search") {
+                VaultSearchBar(
+                    value = cardSearchQuery,
                     onValueChange = { value ->
-                        onLastFourSearchQueryChanged(value)
+                        onCardSearchQueryChanged(value)
                         scope.launch { listState.scrollToItem(0) }
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.card_search_last_four)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Number,
-                        imeAction = ImeAction.Search,
-                    ),
-                    trailingIcon = {
-                        if (lastFourSearchQuery.isNotEmpty()) {
-                            TextButton(onClick = {
-                                onLastFourSearchQueryChanged("")
-                                scope.launch { listState.scrollToItem(0) }
-                            }) {
-                                Text(stringResource(R.string.card_search_clear))
-                            }
-                        }
+                    label = stringResource(R.string.card_search_hint),
+                    clearLabel = stringResource(R.string.card_search_clear),
+                    onClear = {
+                        onCardSearchQueryChanged("")
+                        scope.launch { listState.scrollToItem(0) }
                     },
-                    supportingText = if (lastFourSearchQuery.isNotEmpty()) {
-                        { Text(stringResource(R.string.card_search_all_folders)) }
-                    } else null,
+                    supportingLabel = if (cardSearchQuery.isNotEmpty()) {
+                        stringResource(R.string.card_search_all_folders)
+                    } else {
+                        null
+                    },
                 )
             }
 
@@ -188,7 +181,7 @@ fun CardListScreen(
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
-            if (lastFourSearchQuery.isEmpty() && entries.isNotEmpty()) {
+            if (cardSearchQuery.isEmpty() && entries.isNotEmpty()) {
                 item(key = "mixed-wallet-stack-$selectedFolderId") {
                     MixedWalletStack(
                         entries = entries, enabled = !sortingInProgress,
@@ -212,15 +205,20 @@ fun CardListScreen(
                                 FolderWalletCard(folder, folders, onRenameFolder, onMoveFolder, onDeleteFolder, onSetFolderColor)
                             }
                         } else visibleCards.firstOrNull { it.id == entry.id }?.let { card ->
-                            CardTemplatePreview(CardTemplateRegistry.findOrDefault(card.cardTemplateId),
-                                modifier = Modifier.fillMaxWidth(), nickname = card.nickname,
-                                cardNetwork = card.cardNetwork, shadowElevation = 0.dp)
+                            CardTemplatePreview(
+                                template = CardTemplateRegistry.findOrDefault(card.cardTemplateId),
+                                modifier = Modifier.fillMaxWidth(),
+                                nickname = card.nickname,
+                                cardNetwork = card.cardNetwork,
+                                lastFour = card.lastFour,
+                                shadowElevation = 0.dp,
+                            )
                         }
                     }
                 }
             } else if (visibleCards.isEmpty()) {
                 item(key = "empty-state") {
-                    if (lastFourSearchQuery.isEmpty()) {
+                    if (cardSearchQuery.isEmpty()) {
                         if (folders.any { it.parentFolderId == selectedFolderId }) {
                             Text("请选择一个子文件夹", modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
@@ -239,7 +237,7 @@ fun CardListScreen(
                     CardWalletStack(
                         cards = visibleCards,
                         sortingInProgress = sortingInProgress,
-                        reorderEnabled = lastFourSearchQuery.isEmpty(),
+                        reorderEnabled = cardSearchQuery.isEmpty(),
                         openActionLabel = stringResource(R.string.action_open_card_detail),
                         moveUpActionLabel = stringResource(R.string.action_move_up),
                         moveDownActionLabel = stringResource(R.string.action_move_down),
@@ -257,9 +255,9 @@ fun CardListScreen(
 internal fun visibleCardsForWallet(
     cards: List<CardListItemUiModel>,
     selectedFolderId: UUID?,
-    lastFourSearchQuery: String,
-): List<CardListItemUiModel> = if (lastFourSearchQuery.isNotEmpty()) {
-    cards.filter { it.lastFour.endsWith(lastFourSearchQuery) }
+    cardSearchQuery: String,
+): List<CardListItemUiModel> = if (cardSearchQuery.isNotBlank()) {
+    cards.filter { cardMatchesSearch(it, cardSearchQuery) }
 } else {
     cards.filter { it.folderId == selectedFolderId }
 }
@@ -271,6 +269,64 @@ private fun mergeVisibleOrder(
     val visible = orderedVisibleIds.iterator()
     val visibleSet = orderedVisibleIds.toSet()
     return allCards.map { card -> if (card.id in visibleSet) visible.next() else card.id }
+}
+
+@Composable
+internal fun VaultSearchBar(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    clearLabel: String,
+    onClear: () -> Unit,
+    supportingLabel: String? = null,
+) {
+    val iconColor = MaterialTheme.colorScheme.onSurfaceVariant
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Text,
+            imeAction = ImeAction.Search,
+        ),
+        leadingIcon = {
+            Canvas(modifier = Modifier.size(18.dp)) {
+                val strokeWidth = 1.8.dp.toPx()
+                val r = size.minDimension * 0.33f
+                val center = Offset(size.width * 0.43f, size.height * 0.43f)
+                drawCircle(
+                    color = iconColor,
+                    radius = r,
+                    center = center,
+                    style = Stroke(width = strokeWidth),
+                )
+                drawLine(
+                    color = iconColor,
+                    start = Offset(center.x + r * 0.72f, center.y + r * 0.72f),
+                    end = Offset(size.width * 0.88f, size.height * 0.88f),
+                    strokeWidth = strokeWidth,
+                    cap = StrokeCap.Round,
+                )
+            }
+        },
+        trailingIcon = {
+            if (value.isNotEmpty()) {
+                TextButton(onClick = onClear) {
+                    Text(clearLabel)
+                }
+            }
+        },
+        supportingText = supportingLabel?.let { text -> { Text(text) } },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+            focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
+            unfocusedBorderColor = Color.White.copy(alpha = 0.08f),
+        ),
+    )
 }
 
 @Composable
@@ -292,10 +348,14 @@ private fun WalletHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val backLabel = stringResource(R.string.action_back)
+            val backInteraction = remember { MutableInteractionSource() }
             Surface(
                 onClick = onBackToHome,
+                interactionSource = backInteraction,
                 modifier = Modifier
                     .size(42.dp)
+                    .pressScale(backInteraction, pressedScale = 0.92f)
+                    .specularRim(cornerRadius = 21.dp, topAlpha = 0.22f)
                     .clearAndSetSemantics {
                         contentDescription = backLabel
                         onClick(label = backLabel) {
@@ -360,11 +420,18 @@ private fun WalletActionButton(
     onClick: () -> Unit,
     emphasized: Boolean = false,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
     Surface(
         onClick = onClick,
         enabled = enabled,
+        interactionSource = interactionSource,
         modifier = Modifier
             .size(48.dp)
+            .pressScale(interactionSource, pressedScale = 0.92f)
+            .specularRim(
+                cornerRadius = 24.dp,
+                topAlpha = if (emphasized) 0.38f else 0.22f,
+            )
             .clearAndSetSemantics {
                 contentDescription = contentDescriptionText
                 onClick(label = contentDescriptionText) {
@@ -541,11 +608,15 @@ fun CardDetailScreen(
                 },
                 navigationIcon = {
                     val backLabel = stringResource(R.string.action_back)
+                    val backInteraction = remember { MutableInteractionSource() }
                     Surface(
                         onClick = onBack,
+                        interactionSource = backInteraction,
                         modifier = Modifier
                             .padding(start = 8.dp)
                             .size(40.dp)
+                            .pressScale(backInteraction, pressedScale = 0.92f)
+                            .specularRim(cornerRadius = 20.dp, topAlpha = 0.22f)
                             .clearAndSetSemantics {
                                 contentDescription = backLabel
                                 onClick(label = backLabel) {
@@ -624,12 +695,16 @@ private fun LoadedCardDetail(
     onDelete: () -> Unit,
 ) {
     var showCardBack by remember(recordId) { mutableStateOf(false) }
-    LaunchedEffect(recordId) { showCardBack = true }
+    LaunchedEffect(recordId) {
+        showCardBack = true
+    }
+    val copyCardNote = rememberCardNoteCopier()
     val cvvHiddenLabel = stringResource(R.string.card_detail_cvv_hidden)
     val cvvNotSavedLabel = stringResource(R.string.card_detail_cvv_not_saved)
     val sensitiveDescription = stringResource(R.string.card_detail_sensitive_content_description)
     val visibleSecrets = (revealedSecrets as? RevealedCardSecretsUiState.Visible)
         ?.takeIf { visible -> visible.recordId == recordId }
+    val actionShape = RoundedCornerShape(16.dp)
 
     LazyColumn(
         modifier = Modifier
@@ -669,29 +744,44 @@ private fun LoadedCardDetail(
             )
         }
         item(key = "detail-actions") {
-            AnimatedVisibility(
-                visible = showCardBack,
-                enter = fadeIn(animationSpec = tween(durationMillis = 220, delayMillis = 120)),
-                exit = fadeOut(animationSpec = tween(durationMillis = 120)),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                OutlinedButton(
+                    onClick = { onEdit(recordId) },
+                    enabled = card.canEdit,
+                    shape = actionShape,
+                    modifier = Modifier.weight(1f),
                 ) {
-                    OutlinedButton(
-                        onClick = { onEdit(recordId) },
-                        enabled = card.canEdit,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(stringResource(R.string.action_edit_card))
-                    }
-                    OutlinedButton(
-                        onClick = onDelete,
-                        enabled = card.canDelete,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(stringResource(R.string.action_delete_card))
-                    }
+                    Text(stringResource(R.string.action_edit_card))
+                }
+                OutlinedButton(
+                    onClick = onDelete,
+                    enabled = card.canDelete,
+                    shape = actionShape,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.action_delete_card))
+                }
+            }
+        }
+        if (canCopyCardNote(card.notes)) {
+            item(key = "copy-card-note") {
+                OutlinedButton(
+                    onClick = { copyCardNote.copy(card.notes) },
+                    shape = actionShape,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        stringResource(
+                            if (copyCardNote.recentlyCopied) {
+                                R.string.action_card_note_copied
+                            } else {
+                                R.string.action_copy_card_note
+                            },
+                        ),
+                    )
                 }
             }
         }
@@ -702,7 +792,11 @@ private fun LoadedCardDetail(
             })
         }
         item(key = "copy-as-new-card") {
-            OutlinedButton(onClick = { onCopyAsNew(recordId) }, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                onClick = { onCopyAsNew(recordId) },
+                shape = actionShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text("以此卡新建")
             }
         }

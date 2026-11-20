@@ -1,5 +1,6 @@
 package com.pdh.cardvault.presentation
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -32,6 +33,7 @@ enum class AddressFormField {
     Country,
 }
 
+@Immutable
 data class AddressFormUiState(
     val nickname: String,
     val detailedAddress: String,
@@ -46,6 +48,7 @@ data class AddressFormUiState(
     override fun toString(): String = "AddressFormUiState(sensitiveFields=redacted)"
 }
 
+@Immutable
 data class AddressListItemUiModel(
     val id: UUID,
     val nickname: String,
@@ -55,6 +58,7 @@ data class AddressListItemUiModel(
     override fun toString(): String = "AddressListItemUiModel(sensitiveFields=redacted)"
 }
 
+@Immutable
 data class AddressDetailUiModel(
     val nickname: String,
     val detailedAddress: String,
@@ -120,6 +124,7 @@ sealed interface AddressNavigationEvent {
     data object DeleteCompleted : AddressNavigationEvent
 }
 
+@Immutable
 data class AddressesUiState(
     val vaultContentState: VaultContentState,
     val addresses: List<AddressListItemUiModel>,

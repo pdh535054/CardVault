@@ -65,9 +65,14 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import com.pdh.cardvault.desktop.model.AndroidTemplateStyleCodec
+import com.pdh.cardvault.desktop.model.CardCoverStyle
 import com.pdh.cardvault.desktop.model.CardPattern
 import com.pdh.cardvault.desktop.model.CoverPalettes
 import com.pdh.cardvault.desktop.model.DesktopCard
+import com.pdh.cardvault.desktop.model.DesktopCardPresets
 import com.pdh.cardvault.desktop.model.NicknameTypography
 import java.util.UUID
 import kotlin.math.roundToInt
@@ -182,7 +187,15 @@ fun CardEditorScreen(controller: DesktopAppController, modifier: Modifier = Modi
                 )
 
                 WithDesktopUiFontSize {
-                    ChoiceTitle("卡面颜色")
+                    ChoiceTitle("精选预设风格（点击一键套用，下方可自由微调）")
+                    PresetStyleRow(
+                        currentStyle = draft.style,
+                        onSelectPreset = { presetStyle ->
+                            controller.updateDraft { it.copy(style = presetStyle) }
+                        },
+                    )
+
+                    ChoiceTitle("卡面颜色（28 款预设 + 自由调色）")
                     Row(
                         Modifier.fillMaxWidth().dragScrollableHorizontally(paletteScrollState),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -216,10 +229,14 @@ fun CardEditorScreen(controller: DesktopAppController, modifier: Modifier = Modi
                         )
                     }
 
-                    ChoiceTitle("花纹")
-                    ChoiceRow(CardPattern.entries, draft.style.pattern, CardPattern::displayName) { pattern ->
-                        controller.updateDraft { it.copy(style = it.style.copy(pattern = pattern, sourceTemplateId = null)) }
-                    }
+                    ChoiceTitle("花纹与图案（30 款）")
+                    PatternSwatchRow(
+                        baseStyle = draft.style,
+                        selected = draft.style.pattern,
+                        onSelect = { pattern ->
+                            controller.updateDraft { it.copy(style = it.style.copy(pattern = pattern, sourceTemplateId = null)) }
+                        },
+                    )
 
                     ChoiceTitle("名称版式")
                     ChoiceRow(NicknameTypography.entries, draft.style.typography, NicknameTypography::displayName) { type ->
@@ -231,17 +248,7 @@ fun CardEditorScreen(controller: DesktopAppController, modifier: Modifier = Modi
                         Modifier.fillMaxWidth().dragScrollableHorizontally(nicknameColorScrollState),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        listOf(
-                            0xFFFFF8E8.toInt(),
-                            0xFF111318.toInt(),
-                            0xFFFFD166.toInt(),
-                            0xFFE3EAF2.toInt(),
-                            0xFF87D9FF.toInt(),
-                            0xFF8CE8C5.toInt(),
-                            0xFFFF9DB6.toInt(),
-                            0xFFD7B7FF.toInt(),
-                            0xFFFFA080.toInt(),
-                        ).forEach { argb ->
+                        CoverPalettes.nicknameSwatches.forEach { argb ->
                             Box(
                                 Modifier.size(36.dp).clip(CircleShape).background(Color(argb))
                                     .border(if (draft.style.nicknameArgb == argb) 3.dp else 1.dp, if (draft.style.nicknameArgb == argb) Color(0xFFAFC6FF) else EditorStroke, CircleShape)
@@ -254,7 +261,7 @@ fun CardEditorScreen(controller: DesktopAppController, modifier: Modifier = Modi
                                 .clickable { colorPickerTarget = ColorTarget.Nickname }
                                 .padding(horizontal = 16.dp),
                             contentAlignment = Alignment.Center,
-                        ) { Text("自定义", fontSize = 12.sp, color = Color.Black, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }
+                        ) { Text("自定义", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.SemiBold) }
                     }
                 }
 
@@ -448,6 +455,113 @@ internal fun ColorChoice(label: String, start: Color, end: Color, selected: Bool
         Box(Modifier.size(26.dp).clip(CircleShape).background(Brush.linearGradient(listOf(start, end))))
         Spacer(Modifier.width(8.dp))
         Text(label, fontSize = 12.sp)
+    }
+}
+
+@Composable
+internal fun PresetStyleRow(
+    currentStyle: CardCoverStyle,
+    onSelectPreset: (CardCoverStyle) -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    val currentEncoded = remember(currentStyle) { AndroidTemplateStyleCodec.encode(currentStyle) }
+    Row(
+        Modifier.fillMaxWidth().dragScrollableHorizontally(scrollState),
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        DesktopCardPresets.all.forEach { preset ->
+            val selected = currentEncoded == preset.templateId
+            Column(
+                modifier = Modifier
+                    .width(164.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(if (selected) Color.White.copy(alpha = 0.11f) else Color.White.copy(alpha = 0.04f))
+                    .border(
+                        width = if (selected) 2.dp else 1.dp,
+                        color = if (selected) Color(0xFFAFC6FF) else EditorStroke,
+                        shape = RoundedCornerShape(18.dp),
+                    )
+                    .clickable { onSelectPreset(preset.style) }
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                CardSurface(style = preset.style, modifier = Modifier.fillMaxWidth()) {
+                    Box(Modifier.fillMaxSize().padding(12.dp)) {
+                        NicknameArtwork(
+                            nickname = preset.title,
+                            style = preset.style,
+                            compact = true,
+                            modifier = Modifier.align(Alignment.TopEnd).fillMaxWidth(0.84f),
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 3.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = preset.title,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = preset.subtitle,
+                        fontSize = 10.sp,
+                        color = if (selected) Color(0xFFAFC6FF) else Color.White.copy(alpha = 0.56f),
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun PatternSwatchRow(
+    baseStyle: CardCoverStyle,
+    selected: CardPattern,
+    onSelect: (CardPattern) -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    Row(
+        Modifier.fillMaxWidth().dragScrollableHorizontally(scrollState),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CardPattern.entries.forEach { pattern ->
+            val isSelected = pattern == selected
+            val swatchStyle = remember(baseStyle.startArgb, baseStyle.endArgb, baseStyle.accentArgb, pattern) {
+                baseStyle.copy(pattern = pattern, sourceTemplateId = null)
+            }
+            Column(
+                modifier = Modifier
+                    .width(126.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (isSelected) Color.White.copy(alpha = 0.11f) else Color.White.copy(alpha = 0.035f))
+                    .border(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) Color(0xFFAFC6FF) else EditorStroke,
+                        shape = RoundedCornerShape(16.dp),
+                    )
+                    .clickable { onSelect(pattern) }
+                    .padding(7.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                CardSurface(style = swatchStyle, modifier = Modifier.fillMaxWidth()) {}
+                Text(
+                    text = pattern.displayName,
+                    modifier = Modifier.padding(horizontal = 3.dp),
+                    fontSize = 12.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) Color(0xFFAFC6FF) else Color.White.copy(alpha = 0.84f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 

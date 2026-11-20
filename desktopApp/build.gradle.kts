@@ -16,7 +16,7 @@ plugins {
 }
 
 group = "com.pdh.cardvault"
-version = "1.6.5"
+version = "1.9.1"
 
 val generatedWindowsIcon = layout.buildDirectory.file("generated/cardvault/cardvault.ico")
 val generateWindowsIcon = tasks.register("generateWindowsIcon") {
@@ -72,6 +72,30 @@ kotlin {
     jvmToolchain(21)
 }
 
+// The UI reads its version from this generated resource, so the window title and Settings
+// screen always match the installer version (1.6.5 still showed a hard-coded "1.5.6").
+val generatedVersionResources = layout.buildDirectory.dir("generated/cardvault/resources")
+val generateVersionResource = tasks.register("generateVersionResource") {
+    val versionText = project.version.toString()
+    inputs.property("version", versionText)
+    outputs.dir(generatedVersionResources)
+    doLast {
+        val target = generatedVersionResources.get().file("cardvault-version.properties").asFile
+        target.parentFile.mkdirs()
+        target.writeText("version=$versionText\n")
+    }
+}
+
+sourceSets {
+    main {
+        resources.srcDir(generateVersionResource)
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    systemProperty("cardvault.expectedDesktopVersion", project.version.toString())
+}
+
 dependencies {
     implementation(project(":sync-core"))
     implementation(compose.desktop.currentOs)
@@ -91,11 +115,16 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi)
             packageName = "CardVault"
-            packageVersion = "1.6.5"
+            packageVersion = project.version.toString()
             description = "CardVault offline encrypted card and address wallet"
             vendor = "pdh"
             windows {
                 menuGroup = "CardVault"
+                // Show the installer UI and (re)create the Start menu and desktop entries so an
+                // upgrade never leaves an old shortcut pointing at a previous build.
+                menu = true
+                shortcut = true
+                dirChooser = true
                 upgradeUuid = "9d7356af-889d-4436-a31c-f436ac29cb5c"
                 iconFile.set(generatedWindowsIcon)
             }

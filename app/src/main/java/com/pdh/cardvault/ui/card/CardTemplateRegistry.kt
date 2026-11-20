@@ -160,6 +160,102 @@ object CardTemplateRegistry {
             accent = Color(0xFFFFA7D0),
             foreground = Color(0xFFFFF5FA),
         ),
+        CardCoverColorSpec(
+            id = "titanium",
+            displayNameRes = R.string.card_color_titanium,
+            gradientStart = Color(0xFF8A8E96),
+            gradientEnd = Color(0xFF343840),
+            accent = Color(0xFFE4E7ED),
+            foreground = Color(0xFFF8FAFC),
+        ),
+        CardCoverColorSpec(
+            id = "rosegold",
+            displayNameRes = R.string.card_color_rosegold,
+            gradientStart = Color(0xFFE8B4AC),
+            gradientEnd = Color(0xFF9C5E58),
+            accent = Color(0xFFFFDFD9),
+            foreground = Color(0xFF261210),
+        ),
+        CardCoverColorSpec(
+            id = "bronze",
+            displayNameRes = R.string.card_color_bronze,
+            gradientStart = Color(0xFF8C6239),
+            gradientEnd = Color(0xFF2E1C0E),
+            accent = Color(0xFFE8C090),
+            foreground = Color(0xFFFFF7ED),
+        ),
+        CardCoverColorSpec(
+            id = "emerald",
+            displayNameRes = R.string.card_color_emerald,
+            gradientStart = Color(0xFF0F8A5F),
+            gradientEnd = Color(0xFF042E20),
+            accent = Color(0xFF7CF2C2),
+            foreground = Color(0xFFF0FFF8),
+        ),
+        CardCoverColorSpec(
+            id = "sapphire",
+            displayNameRes = R.string.card_color_sapphire,
+            gradientStart = Color(0xFF1E4F9C),
+            gradientEnd = Color(0xFF061638),
+            accent = Color(0xFF82B8FF),
+            foreground = Color(0xFFF2F7FF),
+        ),
+        CardCoverColorSpec(
+            id = "crimson",
+            displayNameRes = R.string.card_color_crimson,
+            gradientStart = Color(0xFFB8293D),
+            gradientEnd = Color(0xFF3B0812),
+            accent = Color(0xFFFF9CA8),
+            foreground = Color(0xFFFFF5F6),
+        ),
+        CardCoverColorSpec(
+            id = "amber",
+            displayNameRes = R.string.card_color_amber,
+            gradientStart = Color(0xFFD98A2B),
+            gradientEnd = Color(0xFF572B08),
+            accent = Color(0xFFFFD996),
+            foreground = Color(0xFFFFFAF0),
+        ),
+        CardCoverColorSpec(
+            id = "indigo",
+            displayNameRes = R.string.card_color_indigo,
+            gradientStart = Color(0xFF3B358C),
+            gradientEnd = Color(0xFF0E0B2E),
+            accent = Color(0xFFB3AEFF),
+            foreground = Color(0xFFF5F4FF),
+        ),
+        CardCoverColorSpec(
+            id = "cyber",
+            displayNameRes = R.string.card_color_cyber,
+            gradientStart = Color(0xFF143A4A),
+            gradientEnd = Color(0xFF060E17),
+            accent = Color(0xFF00F0FF),
+            foreground = Color(0xFFEFFFFF),
+        ),
+        CardCoverColorSpec(
+            id = "sakura",
+            displayNameRes = R.string.card_color_sakura,
+            gradientStart = Color(0xFFFAD4DF),
+            gradientEnd = Color(0xFFC7859A),
+            accent = Color(0xFFFFF0F5),
+            foreground = Color(0xFF2B121B),
+        ),
+        CardCoverColorSpec(
+            id = "matcha",
+            displayNameRes = R.string.card_color_matcha,
+            gradientStart = Color(0xFFA8C99B),
+            gradientEnd = Color(0xFF56784C),
+            accent = Color(0xFFE5F7DC),
+            foreground = Color(0xFF152412),
+        ),
+        CardCoverColorSpec(
+            id = "sandstone",
+            displayNameRes = R.string.card_color_sandstone,
+            gradientStart = Color(0xFFD9C2A7),
+            gradientEnd = Color(0xFF8C6F52),
+            accent = Color(0xFFFFF2E2),
+            foreground = Color(0xFF261B11),
+        ),
     )
 
     val patterns: List<CardCoverPatternSpec> = listOf(
@@ -185,6 +281,18 @@ object CardTemplateRegistry {
             R.string.card_pattern_continuous,
             CardMotif.ContinuousWave,
         ),
+        CardCoverPatternSpec("prism", R.string.card_pattern_prism, CardMotif.CrystalPrism),
+        CardCoverPatternSpec("sunburst", R.string.card_pattern_sunburst, CardMotif.SunburstRays),
+        CardCoverPatternSpec("mountains", R.string.card_pattern_mountains, CardMotif.MountainPeaks),
+        CardCoverPatternSpec("lotus", R.string.card_pattern_lotus, CardMotif.LotusMandala),
+        CardCoverPatternSpec("constellation", R.string.card_pattern_constellation, CardMotif.ConstellationMap),
+        CardCoverPatternSpec("compass", R.string.card_pattern_compass, CardMotif.AstrolabeCompass),
+        CardCoverPatternSpec("scales", R.string.card_pattern_scales, CardMotif.OceanScales),
+        CardCoverPatternSpec("honeycomb", R.string.card_pattern_honeycomb, CardMotif.HoneycombLattice),
+        CardCoverPatternSpec("chevrons", R.string.card_pattern_chevrons, CardMotif.ChevronStripes),
+        CardCoverPatternSpec("silk", R.string.card_pattern_silk, CardMotif.SilkGuilloche),
+        CardCoverPatternSpec("beams", R.string.card_pattern_beams, CardMotif.AuroraBeams),
+        CardCoverPatternSpec("monolith", R.string.card_pattern_monolith, CardMotif.MonolithSlabs),
     )
 
     val nicknameStyles: List<CardNicknameStyleSpec> = listOf(
@@ -282,6 +390,10 @@ object CardTemplateRegistry {
         CardNicknameColorSpec("rose", R.string.card_name_color_rose, Color(0xFFFF9DB6)),
         CardNicknameColorSpec("violet", R.string.card_name_color_violet, Color(0xFFD7B7FF)),
         CardNicknameColorSpec("coral", R.string.card_name_color_coral, Color(0xFFFFA080)),
+        CardNicknameColorSpec("amber", R.string.card_name_color_amber, Color(0xFFFFB347)),
+        CardNicknameColorSpec("cyan", R.string.card_name_color_cyan, Color(0xFF5CEEFF)),
+        CardNicknameColorSpec("crimson", R.string.card_name_color_crimson, Color(0xFFFF6B7A)),
+        CardNicknameColorSpec("platinum", R.string.card_name_color_platinum, Color(0xFFB8C2CC)),
     )
 
     private val colorsById = colors.associateBy(CardCoverColorSpec::id)
@@ -289,21 +401,132 @@ object CardTemplateRegistry {
     private val nicknameStylesById = nicknameStyles.associateBy(CardNicknameStyleSpec::id)
     private val nicknameColorsById = nicknameColors.associateBy(CardNicknameColorSpec::id)
 
-    /** A small curated gallery; the picker can still create every color/pattern combination. */
-    val templates: List<CardTemplateSpec> = listOf(
-        selection("obsidian", "contours"),
-        selection("midnight", "orbits"),
-        selection("jade", "waves"),
-        selection("garnet", "shards"),
-        selection("champagne", "grid"),
-        selection("silver", "facets"),
-        selection("violet", "stars"),
-        selection("terracotta", "circuit"),
-        selection("cobalt", "ribbons"),
-        selection("glacier", "arcs"),
-        selection("forest", "loops"),
-        selection("magenta", "halos"),
-    ).map(::resolve)
+    /** 20 curated one-tap card presets spanning metallic, cosmic, oriental, cyber, and soft aesthetics. */
+    val presets: List<CardPresetSpec> = listOf(
+        preset(
+            id = "obsidian_prism",
+            titleRes = R.string.card_preset_obsidian_prism_title,
+            subtitleRes = R.string.card_preset_obsidian_prism_sub,
+            selection = selection("obsidian", "prism", "editorial", "gold"),
+        ),
+        preset(
+            id = "sapphire_constellation",
+            titleRes = R.string.card_preset_sapphire_constellation_title,
+            subtitleRes = R.string.card_preset_sapphire_constellation_sub,
+            selection = selection("sapphire", "constellation", "wide", "ice"),
+        ),
+        preset(
+            id = "forest_mountains",
+            titleRes = R.string.card_preset_forest_mountains_title,
+            subtitleRes = R.string.card_preset_forest_mountains_sub,
+            selection = selection("forest", "mountains", "editorial", "ivory"),
+        ),
+        preset(
+            id = "emerald_scales",
+            titleRes = R.string.card_preset_emerald_scales_title,
+            subtitleRes = R.string.card_preset_emerald_scales_sub,
+            selection = selection("emerald", "scales", "split", "mint"),
+        ),
+        preset(
+            id = "cyber_circuit",
+            titleRes = R.string.card_preset_cyber_circuit_title,
+            subtitleRes = R.string.card_preset_cyber_circuit_sub,
+            selection = selection("cyber", "circuit", "mono", "cyan"),
+        ),
+        preset(
+            id = "titanium_frame",
+            titleRes = R.string.card_preset_titanium_frame_title,
+            subtitleRes = R.string.card_preset_titanium_frame_sub,
+            selection = selection("titanium", "frame", "modern", "platinum"),
+        ),
+        preset(
+            id = "champagne_lotus",
+            titleRes = R.string.card_preset_champagne_lotus_title,
+            subtitleRes = R.string.card_preset_champagne_lotus_sub,
+            selection = selection("champagne", "lotus", "elegant", "ink"),
+        ),
+        preset(
+            id = "indigo_compass",
+            titleRes = R.string.card_preset_indigo_compass_title,
+            subtitleRes = R.string.card_preset_indigo_compass_sub,
+            selection = selection("indigo", "compass", "wide", "gold"),
+        ),
+        preset(
+            id = "aurora_beams",
+            titleRes = R.string.card_preset_aurora_beams_title,
+            subtitleRes = R.string.card_preset_aurora_beams_sub,
+            selection = selection("aurora", "beams", "orbit", "mint"),
+        ),
+        preset(
+            id = "sakura_silk",
+            titleRes = R.string.card_preset_sakura_silk_title,
+            subtitleRes = R.string.card_preset_sakura_silk_sub,
+            selection = selection("sakura", "silk", "elegant", "ink"),
+        ),
+        preset(
+            id = "crimson_sunburst",
+            titleRes = R.string.card_preset_crimson_sunburst_title,
+            subtitleRes = R.string.card_preset_crimson_sunburst_sub,
+            selection = selection("crimson", "sunburst", "monogram", "gold"),
+        ),
+        preset(
+            id = "rosegold_ribbons",
+            titleRes = R.string.card_preset_rosegold_ribbons_title,
+            subtitleRes = R.string.card_preset_rosegold_ribbons_sub,
+            selection = selection("rosegold", "ribbons", "editorial", "ink"),
+        ),
+        preset(
+            id = "carbon_monolith",
+            titleRes = R.string.card_preset_carbon_monolith_title,
+            subtitleRes = R.string.card_preset_carbon_monolith_sub,
+            selection = selection("carbon", "monolith", "mono", "silver"),
+        ),
+        preset(
+            id = "amber_mountains",
+            titleRes = R.string.card_preset_amber_mountains_title,
+            subtitleRes = R.string.card_preset_amber_mountains_sub,
+            selection = selection("amber", "mountains", "modern", "ivory"),
+        ),
+        preset(
+            id = "glacier_honeycomb",
+            titleRes = R.string.card_preset_glacier_honeycomb_title,
+            subtitleRes = R.string.card_preset_glacier_honeycomb_sub,
+            selection = selection("glacier", "honeycomb", "mono", "ink"),
+        ),
+        preset(
+            id = "violet_orbits",
+            titleRes = R.string.card_preset_violet_orbits_title,
+            subtitleRes = R.string.card_preset_violet_orbits_sub,
+            selection = selection("violet", "orbits", "orbit", "violet"),
+        ),
+        preset(
+            id = "bronze_arches",
+            titleRes = R.string.card_preset_bronze_arches_title,
+            subtitleRes = R.string.card_preset_bronze_arches_sub,
+            selection = selection("bronze", "arches", "editorial", "gold"),
+        ),
+        preset(
+            id = "matcha_waves",
+            titleRes = R.string.card_preset_matcha_waves_title,
+            subtitleRes = R.string.card_preset_matcha_waves_sub,
+            selection = selection("matcha", "waves", "light", "ink"),
+        ),
+        preset(
+            id = "pearl_tiles",
+            titleRes = R.string.card_preset_pearl_tiles_title,
+            subtitleRes = R.string.card_preset_pearl_tiles_sub,
+            selection = selection("pearl", "tiles", "wide", "ink"),
+        ),
+        preset(
+            id = "cobalt_chevrons",
+            titleRes = R.string.card_preset_cobalt_chevrons_title,
+            subtitleRes = R.string.card_preset_cobalt_chevrons_sub,
+            selection = selection("cobalt", "chevrons", "monogram", "ice"),
+        ),
+    )
+
+    /** Curated gallery exposed for validator and gallery consumers. */
+    val templates: List<CardTemplateSpec> = presets.map(CardPresetSpec::template)
 
     val defaultTemplate: CardTemplateSpec = resolve(
         defaultSelection(),
@@ -314,8 +537,21 @@ object CardTemplateRegistry {
         require(patternsById.size == patterns.size)
         require(nicknameStylesById.size == nicknameStyles.size)
         require(nicknameColorsById.size == nicknameColors.size)
+        require(presets.map(CardPresetSpec::id).distinct().size == presets.size)
         require(defaultTemplate.id == DEFAULT_TEMPLATE_ID)
     }
+
+    private fun preset(
+        id: String,
+        titleRes: Int,
+        subtitleRes: Int,
+        selection: CardCoverSelection,
+    ): CardPresetSpec = CardPresetSpec(
+        id = id,
+        titleRes = titleRes,
+        subtitleRes = subtitleRes,
+        template = resolve(selection),
+    )
 
     fun composeTemplateId(
         colorId: String,

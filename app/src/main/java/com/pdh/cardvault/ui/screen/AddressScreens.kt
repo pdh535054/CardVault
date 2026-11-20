@@ -1,15 +1,9 @@
 package com.pdh.cardvault.ui.screen
 
 import androidx.activity.compose.BackHandler
-
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -46,14 +40,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -68,22 +67,28 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import com.pdh.cardvault.R
 import com.pdh.cardvault.domain.validation.AddressValidationError
+import com.pdh.cardvault.presentation.AddressCopyPart
 import com.pdh.cardvault.presentation.AddressDetailUiModel
 import com.pdh.cardvault.presentation.AddressDetailUiState
-import com.pdh.cardvault.presentation.AddressCopyPart
 import com.pdh.cardvault.presentation.AddressEditUiState
 import com.pdh.cardvault.presentation.AddressFormField
 import com.pdh.cardvault.presentation.AddressFormUiState
 import com.pdh.cardvault.presentation.AddressListItemUiModel
 import com.pdh.cardvault.presentation.AddressOperationMessage
 import com.pdh.cardvault.presentation.VaultFolderUiModel
+import com.pdh.cardvault.presentation.addressMatchesSearch
+import com.pdh.cardvault.presentation.normalizeCardSearchQuery
 import com.pdh.cardvault.ui.card.AddressWalletStack
-import com.pdh.cardvault.ui.card.MixedWalletStack
-import com.pdh.cardvault.ui.card.WalletStackEntry
-import com.pdh.cardvault.ui.card.orderedWalletEntries
 import com.pdh.cardvault.ui.card.CardTemplatePicker
 import com.pdh.cardvault.ui.card.CardTemplatePreview
 import com.pdh.cardvault.ui.card.CardTemplateRegistry
+import com.pdh.cardvault.ui.card.MixedWalletStack
+import com.pdh.cardvault.ui.card.WalletStackEntry
+import com.pdh.cardvault.ui.card.orderedWalletEntries
+import com.pdh.cardvault.ui.theme.CardVaultMotion
+import com.pdh.cardvault.ui.theme.flipSpecularIntensity
+import com.pdh.cardvault.ui.theme.pressScale
+import com.pdh.cardvault.ui.theme.specularRim
 import java.util.UUID
 import kotlin.math.PI
 import kotlin.math.abs
@@ -117,6 +122,14 @@ fun AddressListScreen(
     val children = folders.filter { it.parentFolderId == selectedFolderId }
     val entries = orderedWalletEntries(walletOrder,
         children.map { WalletStackEntry(it.id, true) } + visibleAddresses.map { WalletStackEntry(it.id, false) })
+    var addressSearchQuery by rememberSaveable { mutableStateOf("") }
+    val searching = addressSearchQuery.isNotBlank()
+    val searchResults = if (searching) {
+        addresses.filter { addressMatchesSearch(it, addressSearchQuery) }
+    } else {
+        emptyList()
+    }
+    val openAddressLabel = stringResource(R.string.action_open_address_detail)
     val goBack = {
         if (selectedFolderId != null) onFolderSelected(parentFolderForBack(folders, selectedFolderId))
         else onBack()
@@ -136,6 +149,57 @@ fun AddressListScreen(
             }
             if (operationMessage != AddressOperationMessage.None) {
                 item("address-message") { AddressOperationNotice(operationMessage) }
+            }
+            if (addresses.isNotEmpty()) {
+                item("address-search") {
+                    VaultSearchBar(
+                        value = addressSearchQuery,
+                        onValueChange = { value -> addressSearchQuery = normalizeCardSearchQuery(value) },
+                        label = stringResource(R.string.address_search_hint),
+                        clearLabel = stringResource(R.string.card_search_clear),
+                        onClear = { addressSearchQuery = "" },
+                        supportingLabel = if (searching) {
+                            stringResource(R.string.card_search_all_folders)
+                        } else {
+                            null
+                        },
+                    )
+                }
+            }
+            if (searching) {
+                if (searchResults.isEmpty()) {
+                    item("address-search-empty") {
+                        Text(
+                            text = stringResource(R.string.address_search_no_results),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                } else {
+                    searchResults.forEach { address ->
+                        item("address-search-${address.id}") {
+                            val interactionSource = remember(address.id) { MutableInteractionSource() }
+                            CardTemplatePreview(
+                                CardTemplateRegistry.findOrDefault(address.cardTemplateId),
+                                nickname = address.nickname,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .pressScale(interactionSource, pressedScale = 0.98f)
+                                    .clip(MaterialTheme.shapes.extraLarge)
+                                    .clickable(
+                                        interactionSource = interactionSource,
+                                        indication = null,
+                                        onClickLabel = openAddressLabel,
+                                    ) {
+                                        onAddressSelected(address.id)
+                                    },
+                                shadowElevation = 0.dp,
+                            )
+                        }
+                    }
+                }
+                return@LazyColumn
             }
             item("address-folder-actions") {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
@@ -173,8 +237,12 @@ fun AddressListScreen(
                         if (entry.isFolder) children.firstOrNull { it.id == entry.id }?.let { folder ->
                             FolderWalletCard(folder, folders, onRenameFolder, onMoveFolder, onDeleteFolder, onSetFolderColor)
                         } else visibleAddresses.firstOrNull { it.id == entry.id }?.let { address ->
-                            CardTemplatePreview(CardTemplateRegistry.findOrDefault(address.cardTemplateId),
-                                nickname = address.nickname, modifier = Modifier.fillMaxWidth(), shadowElevation = 0.dp)
+                            CardTemplatePreview(
+                                template = CardTemplateRegistry.findOrDefault(address.cardTemplateId),
+                                nickname = address.nickname,
+                                modifier = Modifier.fillMaxWidth(),
+                                shadowElevation = 0.dp,
+                            )
                         }
                     }
                 }
@@ -223,9 +291,14 @@ private fun AddressHeader(
                 }
             }
         }
+        val addInteraction = remember { MutableInteractionSource() }
         Surface(
             onClick = onAddAddress,
-            modifier = Modifier.size(48.dp),
+            interactionSource = addInteraction,
+            modifier = Modifier
+                .size(48.dp)
+                .pressScale(addInteraction, pressedScale = 0.92f)
+                .specularRim(cornerRadius = 24.dp, topAlpha = 0.38f),
             shape = CircleShape,
             color = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -585,7 +658,10 @@ fun AddressDetailScreen(
                 )
                 is AddressDetailUiState.Loaded -> {
                     var showBack by remember(state.recordId) { mutableStateOf(false) }
-                    LaunchedEffect(state.recordId) { showBack = true }
+                    LaunchedEffect(state.recordId) {
+                        showBack = true
+                    }
+                    val actionShape = RoundedCornerShape(16.dp)
                     FlippableAddressDetail(
                         address = state.address,
                         showBack = showBack,
@@ -594,30 +670,26 @@ fun AddressDetailScreen(
                     )
                     AddressOperationNotice(operationMessage)
                     RecordMoveButton(folders, currentFolderId, onMove = { destination -> onMove(state.recordId, destination) })
-                    AnimatedVisibility(
-                        visible = showBack,
-                        enter = fadeIn(animationSpec = tween(durationMillis = 220, delayMillis = 120)),
-                        exit = fadeOut(animationSpec = tween(durationMillis = 120)),
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        OutlinedButton(
+                            onClick = { onEdit(state.recordId) },
+                            shape = actionShape,
+                            modifier = Modifier.weight(1f),
                         ) {
-                            OutlinedButton(
-                                onClick = { onEdit(state.recordId) },
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Text(stringResource(R.string.address_edit))
-                            }
-                            OutlinedButton(
-                                onClick = { deleteCandidate = state.recordId },
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.address_delete),
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
+                            Text(stringResource(R.string.address_edit))
+                        }
+                        OutlinedButton(
+                            onClick = { deleteCandidate = state.recordId },
+                            shape = actionShape,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.address_delete),
+                                color = MaterialTheme.colorScheme.error,
+                            )
                         }
                     }
                 }
@@ -632,33 +704,54 @@ private fun FlippableAddressDetail(
     showBack: Boolean,
     onCopy: (AddressCopyPart) -> Unit,
     onShowBackChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val rotation by animateFloatAsState(
         targetValue = if (showBack) 180f else 0f,
-        animationSpec = spring(dampingRatio = 0.88f, stiffness = 320f),
+        animationSpec = CardVaultMotion.flipSpring(),
         label = "address-detail-flip",
     )
     val density = LocalDensity.current.density
     val cardShape = MaterialTheme.shapes.extraLarge
     val template = CardTemplateRegistry.findOrDefault(address.cardTemplateId)
-    val flipScale = 0.96f + 0.04f * abs(cos(rotation / 180f * PI)).toFloat()
+    val flipScale = 0.965f + 0.035f * abs(cos(rotation / 180f * PI)).toFloat()
+    val specular = flipSpecularIntensity(rotation)
     val toggleLabel = stringResource(
         if (showBack) R.string.card_flip_to_front else R.string.card_flip_to_back,
     )
     val toggle = { onShowBackChanged(!showBack) }
 
     BoxWithConstraints(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .graphicsLayer {
                 rotationY = rotation
                 scaleX = flipScale
                 scaleY = flipScale
-                cameraDistance = 28f * density
+                cameraDistance = 30f * density
                 shadowElevation = (12f + 8f * flipScale).dp.toPx()
                 transformOrigin = TransformOrigin.Center
                 shape = cardShape
-                clip = false
+                clip = true
+            }
+            .drawWithContent {
+                drawContent()
+                if (specular > 0.004f) {
+                    val sweepCenter = (rotation / 180f).coerceIn(0f, 1f)
+                    val bandSpan = 0.42f * size.width
+                    val cx = size.width * sweepCenter
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.White.copy(alpha = 0.24f * specular),
+                                Color.Transparent,
+                            ),
+                            start = Offset(cx - bandSpan, 0f),
+                            end = Offset(cx + bandSpan, size.height * 0.58f),
+                        ),
+                    )
+                }
             }
             .clickable(onClick = toggle)
             .semantics {
@@ -703,9 +796,26 @@ private fun AddressBackCard(
             .fillMaxWidth()
             .heightIn(min = minimumHeight)
             .clip(MaterialTheme.shapes.extraLarge)
-            .background(
-                Brush.linearGradient(listOf(template.gradientStart, template.gradientEnd)),
-            )
+            .drawWithCache {
+                val midColor = lerp(template.gradientStart, template.gradientEnd, 0.48f)
+                val coverBrush = Brush.linearGradient(
+                    0.0f to template.gradientStart,
+                    0.52f to midColor,
+                    1.0f to template.gradientEnd,
+                    start = Offset.Zero,
+                    end = Offset(size.width, size.height),
+                )
+                val glowBrush = Brush.radialGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.14f), Color.Transparent),
+                    center = Offset(size.width * 0.18f, size.height * 0.12f),
+                    radius = size.maxDimension * 0.65f,
+                )
+                onDrawBehind {
+                    drawRect(brush = coverBrush)
+                    drawRect(brush = glowBrush)
+                }
+            }
+            .specularRim(cornerRadius = 32.dp, topAlpha = 0.24f)
             .padding(horizontal = 22.dp, vertical = 18.dp),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -850,11 +960,15 @@ private fun AddressOperationNotice(message: AddressOperationMessage) {
 @Composable
 private fun RoundBackButton(onBack: () -> Unit) {
     val label = stringResource(R.string.action_back)
+    val interactionSource = remember { MutableInteractionSource() }
     Surface(
         onClick = onBack,
+        interactionSource = interactionSource,
         modifier = Modifier
             .padding(horizontal = 8.dp)
             .size(40.dp)
+            .pressScale(interactionSource, pressedScale = 0.92f)
+            .specularRim(cornerRadius = 20.dp, topAlpha = 0.22f)
             .clearAndSetSemantics {
                 contentDescription = label
                 onClick(label = label) {

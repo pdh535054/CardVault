@@ -1,9 +1,7 @@
 package com.pdh.cardvault.ui.card
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +22,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -50,6 +50,9 @@ import com.pdh.cardvault.R
 import com.pdh.cardvault.domain.validation.CardNumberTools
 import com.pdh.cardvault.presentation.CardDetailUiModel
 import com.pdh.cardvault.presentation.CvvSaveStatusUi
+import com.pdh.cardvault.ui.theme.CardVaultMotion
+import com.pdh.cardvault.ui.theme.flipSpecularIntensity
+import com.pdh.cardvault.ui.theme.specularRim
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -79,13 +82,12 @@ fun FlippableMaskedCardDetail(
 ) {
     val rotation by animateFloatAsState(
         targetValue = if (showBack) 180f else 0f,
-        animationSpec = spring(dampingRatio = 0.88f, stiffness = 320f),
+        animationSpec = CardVaultMotion.flipSpring(),
         label = "card-detail-flip",
     )
     val density = LocalDensity.current.density
     val cardShape = MaterialTheme.shapes.extraLarge
     val template = CardTemplateRegistry.findOrDefault(card.cardTemplateId)
-    val flipScale = 0.96f + 0.04f * abs(cos(rotation / 180f * PI)).toFloat()
     val flip = {
         if (showBack) {
             onHideSecrets()
@@ -100,14 +102,34 @@ fun FlippableMaskedCardDetail(
             .fillMaxWidth()
             .aspectRatio(CARD_ASPECT_RATIO)
             .graphicsLayer {
+                val flipScale = 0.968f + 0.032f * abs(cos(rotation / 180f * PI)).toFloat()
                 rotationY = rotation
                 scaleX = flipScale
                 scaleY = flipScale
-                cameraDistance = 28f * density
-                shadowElevation = (12f + 8f * flipScale).dp.toPx()
+                cameraDistance = 26f * density
+                shadowElevation = (10f + 8f * flipScale).dp.toPx()
                 transformOrigin = TransformOrigin.Center
                 shape = cardShape
-                clip = false
+                clip = true
+            }
+            .drawWithContent {
+                drawContent()
+                val sheen = flipSpecularIntensity(rotation)
+                if (sheen > 0f) {
+                    val progress = (rotation / 180f).coerceIn(0f, 1f)
+                    val bandX = size.width * (-0.25f + progress * 1.5f)
+                    drawRect(
+                        brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.White.copy(alpha = 0.22f * sheen),
+                                Color.Transparent,
+                            ),
+                            start = Offset(bandX - size.width * 0.28f, 0f),
+                            end = Offset(bandX + size.width * 0.28f, size.height),
+                        ),
+                    )
+                }
             }
             .clickable(onClick = flip)
             .semantics {
@@ -189,7 +211,9 @@ private fun CardBack(
     val notesHiddenSemantics = stringResource(R.string.card_notes_hidden_semantics)
 
     Surface(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .specularRim(cornerRadius = 32.dp, topAlpha = 0.28f),
         shape = MaterialTheme.shapes.extraLarge,
         color = template.gradientEnd,
         tonalElevation = 2.dp,
@@ -197,29 +221,39 @@ private fun CardBack(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.linearGradient(
+                .drawWithCache {
+                    val backBrush = Brush.linearGradient(
                         colors = listOf(
                             template.gradientEnd,
                             template.gradientStart,
                             template.gradientEnd.copy(alpha = 0.96f),
                         ),
-                    ),
-                ),
+                    )
+                    val ringStroke = Stroke(width = size.minDimension * 0.01f)
+                    val ringCenter = Offset(size.width * 0.92f, size.height * 0.02f)
+                    val ringRadius = size.minDimension * 0.58f
+                    val ringColor = template.accent.copy(alpha = 0.1f)
+                    val magTopLeft = Offset(0f, size.height * 0.28f)
+                    val magSize = Size(size.width, size.height * 0.155f)
+                    val magBrush = Brush.verticalGradient(
+                        0.0f to Color.Black.copy(alpha = 0.44f),
+                        0.5f to Color(0xFF141820).copy(alpha = 0.52f),
+                        1.0f to Color.Black.copy(alpha = 0.36f),
+                        startY = magTopLeft.y,
+                        endY = magTopLeft.y + magSize.height,
+                    )
+                    onDrawBehind {
+                        drawRect(brush = backBrush)
+                        drawCircle(
+                            color = ringColor,
+                            radius = ringRadius,
+                            center = ringCenter,
+                            style = ringStroke,
+                        )
+                        drawRect(brush = magBrush, topLeft = magTopLeft, size = magSize)
+                    }
+                },
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(
-                    color = template.accent.copy(alpha = 0.1f),
-                    radius = size.minDimension * 0.58f,
-                    center = Offset(size.width * 0.92f, size.height * 0.02f),
-                    style = Stroke(width = size.minDimension * 0.01f),
-                )
-                drawRect(
-                    color = Color.Black.copy(alpha = 0.32f),
-                    topLeft = Offset(0f, size.height * 0.29f),
-                    size = Size(size.width, size.height * 0.15f),
-                )
-            }
 
             Column(
                 modifier = Modifier

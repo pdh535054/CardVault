@@ -1,5 +1,6 @@
 package com.pdh.cardvault.desktop.model
 
+import androidx.compose.runtime.Immutable
 import java.time.Clock
 import java.util.UUID
 
@@ -12,6 +13,7 @@ enum class DesktopAddressCopyPart {
     Country,
 }
 
+@Immutable
 data class DesktopAddress(
     val id: String,
     val nickname: String,
@@ -42,7 +44,7 @@ data class DesktopAddress(
         require(folderId == null || runCatching { UUID.fromString(folderId) }.isSuccess) { "地址记录无效。" }
     }
 
-    val style: CardCoverStyle get() = AndroidTemplateStyleCodec.decode(cardTemplateId)
+    val style: CardCoverStyle by lazy(LazyThreadSafetyMode.NONE) { AndroidTemplateStyleCodec.decode(cardTemplateId) }
 
     fun copyText(part: DesktopAddressCopyPart = DesktopAddressCopyPart.Complete): String = when (part) {
         DesktopAddressCopyPart.Complete -> listOf(detailedAddress, other, city, postalCode, country)

@@ -5,8 +5,11 @@ import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.pdh.cardvault.data.BackupHistoryStore
+import com.pdh.cardvault.data.InMemoryBackupHistoryStore
 import com.pdh.cardvault.security.auth.AuthenticationAction
 import com.pdh.cardvault.sync.CardVaultSyncFiles
+import com.pdh.cardvault.sync.PairingCode
 import com.pdh.cardvault.sync.SyncErrorCode
 import com.pdh.cardvault.sync.SyncFileKind
 import com.pdh.cardvault.sync.SyncProtocolException
@@ -18,6 +21,7 @@ import com.pdh.cardvault.sync.android.SyncImportResult
 import com.pdh.cardvault.sync.android.SyncNotPairedException
 import com.pdh.cardvault.sync.android.SyncPairingStatus
 import java.io.IOException
+import com.pdh.cardvault.wallet.BackupReminderPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -52,6 +56,7 @@ internal interface VaultTransferFiles {
     suspend fun publish(fileName: String, bytes: ByteArray): PublishedVaultTransferFile
     suspend fun read(uri: String): ByteArray
     fun shareIntent(file: PublishedVaultTransferFile): Intent
+    suspend fun save(file: PublishedVaultTransferFile, destinationUri: String)
 }
 
 internal interface PublishedVaultTransferFile {
@@ -70,11 +75,15 @@ internal class AndroidVaultTransferFiles(
 
     override suspend fun read(uri: String): ByteArray = exchange.readEncryptedImport(uri.toUri())
 
-    override fun shareIntent(file: PublishedVaultTransferFile): Intent {
-        val androidFile = file as? AndroidPublishedVaultTransferFile
+    override fun shareIntent(file: PublishedVaultTransferFile): Intent =
+        exchange.createShareIntent(file.asAndroidFile())
+
+    override suspend fun save(file: PublishedVaultTransferFile, destinationUri: String) =
+        exchange.saveEncryptedExport(file.asAndroidFile(), destinationUri.toUri())
+
+    private fun PublishedVaultTransferFile.asAndroidFile(): AndroidSyncFileExchange.SharedEncryptedFile =
+        (this as? AndroidPublishedVaultTransferFile)?.sharedFile
             ?: throw IllegalArgumentException("Unsupported encrypted transfer file.")
-        return exchange.createShareIntent(androidFile.sharedFile)
-    }
 
     private data class AndroidPublishedVaultTransferFile(
         val sharedFile: AndroidSyncFileExchange.SharedEncryptedFile,
@@ -90,10 +99,18 @@ class VaultTransferViewModel internal constructor(
     private val operations: VaultSyncOperations,
     private val files: VaultTransferFiles,
     private val externalScope: CoroutineScope? = null,
+    private val backupHistory: BackupHistoryStore = InMemoryBackupHistoryStore(),
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(VaultTransferUiState())
+    private val _uiState = MutableStateFlow(
+        VaultTransferUiState(
+            lastSyncAtEpochMillis = backupHistory.lastSyncAtEpochMillis(),
+            backupReminderSnoozedUntilEpochMillis = backupHistory.reminderSnoozedUntilEpochMillis(),
+        ),
+    )
     val uiState = _uiState.asStateFlow()
 
+    private var statusJob: Job? = null
     private var operationJob: Job? = null
     private var lifecycleGeneration = 0L
     private var authenticationSerial = 0L
@@ -107,10 +124,11 @@ class VaultTransferViewModel internal constructor(
         get() = externalScope ?: viewModelScope
 
     fun onVaultAccessAllowed() {
-        if (_uiState.value.busy) return
         val expectedGeneration = lifecycleGeneration
-        operationJob?.cancel()
-        operationJob = operationScope.launch {
+        // Refreshing the pairing status runs in its own job so that it can never cancel an
+        // import that was started by an inbound "Open with CardVault" intent at the same time.
+        statusJob?.cancel()
+        statusJob = operationScope.launch {
             try {
                 val status = operations.pairingStatus()
                 if (expectedGeneration != lifecycleGeneration) return@launch
@@ -124,7 +142,7 @@ class VaultTransferViewModel internal constructor(
             } catch (exception: CancellationException) {
                 throw exception
             } catch (_: Exception) {
-                if (expectedGeneration == lifecycleGeneration) {
+                if (expectedGeneration == lifecycleGeneration && !_uiState.value.busy) {
                     showError("无法读取同步状态")
                 }
             }
@@ -133,22 +151,29 @@ class VaultTransferViewModel internal constructor(
 
     fun onAppBackgrounded(preservePendingAuthentication: Boolean) {
         lifecycleGeneration += 1L
+        statusJob?.cancel()
+        statusJob = null
         operationJob?.cancel()
         operationJob = null
         if (!preservePendingAuthentication || pendingAuthentication == null) {
             pendingAuthentication = null
             pendingExportMode = null
-            clearPendingImport()
+            // The selected .cvpair/.cvsync bytes are ciphertext that still exists in the
+            // sender app, so keeping them while the user switches away to copy the pairing
+            // code adds no exposure. The typed pairing code itself is always wiped.
+            val retainPendingImport = pendingImportBytes != null &&
+                pendingImportKind == SyncFileKind.PAIRING
+            if (!retainPendingImport) clearPendingImport()
             val retainPreparedExport = preparedFile != null
             _uiState.update { current ->
                 current.copy(
                     busy = false,
                     preparedFileName = current.preparedFileName.takeIf { retainPreparedExport },
                     pairingCode = current.pairingCode.takeIf { retainPreparedExport },
-                    importNeedsPairingCode = false,
+                    importNeedsPairingCode = retainPendingImport,
                     pairingCodeInput = "",
                     authenticationRequest = null,
-                    message = current.message.takeIf { retainPreparedExport },
+                    message = current.message.takeIf { retainPreparedExport || retainPendingImport },
                 )
             }
         } else {
@@ -177,6 +202,17 @@ class VaultTransferViewModel internal constructor(
         clearPreparedExport()
         pendingExportMode = ExportMode.Rotation
         queueAuthentication(AuthenticationAction.RotateSyncKey)
+    }
+
+    /**
+     * Starts an import requested from outside the app ("Open with" / "Share" → CardVault).
+     * Returns false while another transfer step is running so the caller can retry later
+     * instead of silently dropping the request.
+     */
+    fun acceptInboundImport(uri: String): Boolean {
+        if (_uiState.value.busy || pendingAuthentication != null) return false
+        onImportUriSelected(uri)
+        return true
     }
 
     fun onImportUriSelected(uri: String) {
@@ -243,6 +279,25 @@ class VaultTransferViewModel internal constructor(
             }
             .take(MAX_PAIRING_CODE_INPUT)
         _uiState.update { current -> current.copy(pairingCodeInput = normalized, message = null) }
+    }
+
+    /** Pastes a pairing code found anywhere in the clipboard text (e.g. a forwarded chat message). */
+    fun pastePairingCode(clipboardText: String?) {
+        if (!_uiState.value.importNeedsPairingCode || _uiState.value.busy) return
+        val code = PairingCode.findIn(clipboardText)
+        if (code == null) {
+            showError("剪贴板里没有找到配对码（格式为 CVP1-…），请先复制配对码")
+            return
+        }
+        updatePairingCode(code)
+        _uiState.update { current ->
+            current.copy(
+                message = VaultTransferMessage(
+                    text = "已粘贴配对码，请点「验证并导入」",
+                    kind = VaultTransferMessageKind.Information,
+                ),
+            )
+        }
     }
 
     fun confirmPairingImport() {
@@ -376,6 +431,76 @@ class VaultTransferViewModel internal constructor(
         showError("无法打开系统分享，请稍后重试")
     }
 
+    /** The share sheet opened for a prepared export; counts as "the vault left this device". */
+    fun onPreparedExportShared() {
+        if (preparedFile == null) return
+        recordSync()
+    }
+
+    fun snoozeBackupReminder() {
+        val until = BackupReminderPolicy.snoozeUntil(clock())
+        backupHistory.snoozeReminder(until)
+        _uiState.update { current -> current.copy(backupReminderSnoozedUntilEpochMillis = until) }
+    }
+
+    private fun recordSync() {
+        val now = clock()
+        runCatching { backupHistory.recordSync(now) }
+        _uiState.update { current ->
+            current.copy(
+                lastSyncAtEpochMillis = now,
+                backupReminderSnoozedUntilEpochMillis = null,
+            )
+        }
+    }
+
+    fun onImportPickerUnavailable() {
+        if (_uiState.value.busy) return
+        showError(
+            "无法打开文件选择器。请在微信、QQ 或文件管理中点击该加密文件，" +
+                "选择「用其他应用打开」→ CardVault 直接导入",
+        )
+    }
+
+    fun onSavePickerUnavailable() {
+        if (_uiState.value.busy || preparedFile == null) return
+        showError("无法打开文件保存位置，请改用「打开系统分享」发送加密文件")
+    }
+
+    fun savePreparedExport(destinationUri: String) {
+        val file = preparedFile ?: return
+        if (_uiState.value.busy || pendingAuthentication != null) return
+        val expectedGeneration = lifecycleGeneration
+        _uiState.update { current -> current.copy(busy = true, message = null) }
+        operationJob?.cancel()
+        operationJob = operationScope.launch {
+            try {
+                files.save(file, destinationUri)
+                if (expectedGeneration != lifecycleGeneration) return@launch
+                recordSync()
+                _uiState.update { current ->
+                    current.copy(
+                        busy = false,
+                        message = VaultTransferMessage(
+                            text = if (current.pairingCode != null) {
+                                "加密文件已保存到手机；配对码请另外记好，不要和文件放在一起"
+                            } else {
+                                "加密文件已保存到手机"
+                            },
+                            kind = VaultTransferMessageKind.Success,
+                        ),
+                    )
+                }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                if (expectedGeneration == lifecycleGeneration) {
+                    showError(safeMessage(exception))
+                }
+            }
+        }
+    }
+
     private suspend fun performExport(
         expectedGeneration: Long,
         mode: ExportMode,
@@ -439,6 +564,7 @@ class VaultTransferViewModel internal constructor(
         }
         if (expectedGeneration != lifecycleGeneration) return
         clearPendingImport()
+        recordSync()
         val conflicts = result.conflicts.size
         _uiState.update { current ->
             current.copy(
@@ -543,6 +669,8 @@ class VaultTransferViewModel internal constructor(
             -> "无法验证这个 CardVault 文件"
         }
         is SyncNotPairedException -> "请先通过配对文件连接另一台设备"
+        is SecurityException ->
+            "没有读取该文件的权限。请在微信或文件管理中点击文件，选择「用其他应用打开」→ CardVault"
         is IOException -> "无法读取或写入加密同步文件"
         else -> "同步操作失败，未更改卡包"
     }
@@ -552,6 +680,7 @@ class VaultTransferViewModel internal constructor(
 
     override fun onCleared() {
         lifecycleGeneration += 1L
+        statusJob?.cancel()
         operationJob?.cancel()
         clearPendingImport()
         pendingAuthentication = null
@@ -563,6 +692,7 @@ class VaultTransferViewModel internal constructor(
     internal class Factory(
         private val coordinator: AndroidVaultSyncCoordinator,
         private val fileExchange: AndroidSyncFileExchange,
+        private val backupHistory: BackupHistoryStore,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -570,6 +700,7 @@ class VaultTransferViewModel internal constructor(
                 return VaultTransferViewModel(
                     operations = CoordinatorVaultSyncOperations(coordinator),
                     files = AndroidVaultTransferFiles(fileExchange),
+                    backupHistory = backupHistory,
                 ) as T
             }
             throw IllegalArgumentException("Unsupported ViewModel class")

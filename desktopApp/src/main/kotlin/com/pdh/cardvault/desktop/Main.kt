@@ -52,7 +52,7 @@ private fun launchApplication() = application {
     Window(
         onCloseRequest = ::exitApplication,
         state = state,
-        title = "CardVault",
+        title = DesktopAppInfo.windowTitle,
     ) {
         window.minimumSize = Dimension(1180, 760)
         val initialized = remember {

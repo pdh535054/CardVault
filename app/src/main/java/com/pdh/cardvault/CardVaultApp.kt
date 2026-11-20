@@ -18,6 +18,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
+import com.pdh.cardvault.data.SharedPreferencesBackupHistoryStore
 import com.pdh.cardvault.data.room.CardVaultPersistentGraph
 import com.pdh.cardvault.navigation.CardVaultNavHost
 import com.pdh.cardvault.presentation.CardsViewModel
@@ -90,6 +91,7 @@ fun CardVaultApp(
         AndroidSyncFileExchange(applicationContext)
     }
     val uiState by mainViewModel.uiState.collectAsStateWithLifecycle()
+    val inboundTransferRequest by activity.inboundTransferRequest.collectAsStateWithLifecycle()
     val biometricPrompt = remember(activity, mainViewModel) {
         SystemBiometricPrompt(activity, mainViewModel::onAuthenticationResult)
     }
@@ -126,6 +128,7 @@ fun CardVaultApp(
         VaultTransferViewModel.Factory(
             coordinator = persistentGraph.syncCoordinator,
             fileExchange = syncFileExchange,
+            backupHistory = SharedPreferencesBackupHistoryStore(applicationContext),
         )
     }
     val vaultTransferViewModel: VaultTransferViewModel = viewModel(factory = transferFactory)
@@ -324,6 +327,16 @@ fun CardVaultApp(
                     CardVaultNavHost(
                         navController = navController,
                         showSecurityNoticeAtLaunch = showSecurityNoticeAtLaunch,
+                        showSecurityNotice = uiState.showSecurityNotice,
+                        inboundTransferRequest = inboundTransferRequest,
+                        onInboundTransfer = { request ->
+                            if (vaultTransferViewModel.acceptInboundImport(request.uri)) {
+                                activity.consumeInboundTransfer(request.id)
+                                true
+                            } else {
+                                false
+                            }
+                        },
                         onSecurityNoticeAcknowledged = mainViewModel::acknowledgeSecurityNotice,
                         startupAuthenticationEnabled = uiState.startupAuthenticationEnabled,
                         authenticationInProgress =
@@ -345,6 +358,8 @@ fun CardVaultApp(
                                             vaultTransferShareChooserTitle,
                                         ),
                                     )
+                                }.onSuccess {
+                                    vaultTransferViewModel.onPreparedExportShared()
                                 }.onFailure {
                                     vaultTransferViewModel.onShareDispatchFailed()
                                 }
@@ -352,13 +367,20 @@ fun CardVaultApp(
                                 vaultTransferViewModel.onShareDispatchFailed()
                             }
                         },
+                        onSavePreparedVaultExport = vaultTransferViewModel::savePreparedExport,
                         onCopyVaultPairingCode = {
                             vaultTransferViewModel.copyPreparedPairingCode(
                                 sensitiveClipboardController::copySensitiveText,
                             )
                         },
                         onVaultImportUriSelected = vaultTransferViewModel::onImportUriSelected,
+                        onVaultImportPickerUnavailable =
+                            vaultTransferViewModel::onImportPickerUnavailable,
+                        onVaultSavePickerUnavailable =
+                            vaultTransferViewModel::onSavePickerUnavailable,
                         onVaultPairingCodeChanged = vaultTransferViewModel::updatePairingCode,
+                        onVaultPastePairingCode = vaultTransferViewModel::pastePairingCode,
+                        onSnoozeBackupReminder = vaultTransferViewModel::snoozeBackupReminder,
                         onConfirmVaultPairingImport =
                             vaultTransferViewModel::confirmPairingImport,
                         cardsUiState = cardsUiState,
@@ -413,8 +435,8 @@ fun CardVaultApp(
                             cardsViewModel.reorderCards(orderedIds)
                         },
                         onCardFolderSelected = cardsViewModel::selectWalletFolder,
-                        onCardLastFourSearchQueryChanged =
-                            cardsViewModel::updateLastFourSearchQuery,
+                        onCardSearchQueryChanged =
+                            cardsViewModel::updateCardSearchQuery,
                         onCardFoldersReordered = cardsViewModel::reorderFolders,
                         onCardWalletReordered = { cardsViewModel.reorderWalletEntries(it) },
                         onCreateCardFolder = { cardsViewModel.createFolder(it) },

@@ -1,6 +1,14 @@
 package com.pdh.cardvault.desktop.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -9,11 +17,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +49,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,6 +59,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,10 +67,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -71,6 +87,15 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.pdh.cardvault.desktop.DesktopAppInfo
+import com.pdh.cardvault.desktop.firstDroppedLocalFile
+import com.pdh.cardvault.wallet.BackupReminderPolicy
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.DragData
+import androidx.compose.ui.draganddrop.dragData
 import com.pdh.cardvault.desktop.data.EncryptedDesktopVault
 import com.pdh.cardvault.desktop.model.DesktopCard
 import java.nio.file.Path
@@ -79,13 +104,16 @@ import javax.swing.filechooser.FileNameExtensionFilter
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private val AppBackground = Color(0xFF191919)
-private val NavigationBackground = Color(0xFF1D1D1D)
-private val PanelBackground = Color(0xFF202020)
+private val AppBackground = Color(0xFF0B0E14)
+private val NavigationBackground = Color(0xFF10151F)
+private val PanelBackground = Color(0xFF141B27)
+private val ElevatedSurface = Color(0xFF1A2333)
 private val Hairline = Color.White.copy(alpha = 0.085f)
-private val Accent = Color(0xFFAFC6FF)
+private val Accent = Color(0xFFB4CBFF)
+internal val DesktopEmphasized = CubicBezierEasing(0.08f, 0.82f, 0.17f, 1f)
 internal const val DESKTOP_UI_FONT_SCALE = 1.5f
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun CardVaultDesktopApp(controller: DesktopAppController) {
     val density = LocalDensity.current
@@ -95,30 +123,52 @@ fun CardVaultDesktopApp(controller: DesktopAppController) {
         MaterialTheme(
             colorScheme = darkColorScheme(
                 primary = Accent,
-                onPrimary = Color(0xFF10131A),
+                onPrimary = Color(0xFF0A1220),
                 background = AppBackground,
                 surface = PanelBackground,
-                onSurface = Color(0xFFF1F2F6),
+                surfaceContainerLow = Color(0xFF111722),
+                surfaceContainer = PanelBackground,
+                surfaceContainerHigh = ElevatedSurface,
+                onSurface = Color(0xFFF1F4FA),
+                onSurfaceVariant = Color(0xFF9AA5BA),
             ),
         ) {
             Surface(Modifier.fillMaxSize(), color = AppBackground) {
-                Box(Modifier.fillMaxSize()) {
+                val dropTarget = remember(controller) { TransferFileDropTarget(controller) }
+                Box(
+                    Modifier.fillMaxSize().dragAndDropTarget(
+                        shouldStartDragAndDrop = { event -> event.dragData() is DragData.FilesList },
+                        target = dropTarget,
+                    ),
+                ) {
                     Row(Modifier.fillMaxSize()) {
                         DesktopNavigation(controller)
-                        when (controller.section) {
-                            DesktopSection.Home -> VaultHomeScreen(controller, Modifier.weight(1f))
-                            DesktopSection.Wallet -> WalletScreen(controller, Modifier.weight(1f))
-                            DesktopSection.Editor -> CardEditorScreen(controller, Modifier.weight(1f))
-                            DesktopSection.Addresses -> AddressWalletScreen(controller, Modifier.weight(1f))
-                            DesktopSection.AddressEditor -> AddressEditorScreen(controller, Modifier.weight(1f))
-                            DesktopSection.Transfer -> TransferScreen(controller, Modifier.weight(1f))
-                            DesktopSection.Settings -> SettingsScreen(controller, Modifier.weight(1f))
+                        AnimatedContent(
+                            targetState = controller.section,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            transitionSpec = {
+                                (
+                                    fadeIn(tween(155, easing = DesktopEmphasized)) +
+                                        slideInVertically(tween(195, easing = DesktopEmphasized)) { it / 48 }
+                                    ) togetherWith fadeOut(tween(115))
+                            },
+                            label = "desktop-section",
+                        ) { section ->
+                            when (section) {
+                                DesktopSection.Home -> VaultHomeScreen(controller, Modifier.fillMaxSize())
+                                DesktopSection.Wallet -> WalletScreen(controller, Modifier.fillMaxSize())
+                                DesktopSection.Editor -> CardEditorScreen(controller, Modifier.fillMaxSize())
+                                DesktopSection.Addresses -> AddressWalletScreen(controller, Modifier.fillMaxSize())
+                                DesktopSection.AddressEditor -> AddressEditorScreen(controller, Modifier.fillMaxSize())
+                                DesktopSection.Transfer -> TransferScreen(controller, Modifier.fillMaxSize())
+                                DesktopSection.Settings -> SettingsScreen(controller, Modifier.fillMaxSize())
+                            }
                         }
                     }
                     AnimatedVisibility(
                         visible = controller.notice != null,
-                        enter = fadeIn() + slideInVertically { it / 2 },
-                        exit = fadeOut() + slideOutVertically { it / 2 },
+                        enter = fadeIn(tween(150)) + slideInVertically(tween(180)) { it / 2 },
+                        exit = fadeOut(tween(120)) + slideOutVertically(tween(140)) { it / 2 },
                         modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 26.dp),
                     ) {
                         controller.notice?.let { message ->
@@ -128,17 +178,64 @@ fun CardVaultDesktopApp(controller: DesktopAppController) {
                             }
                             Text(
                                 text = message,
-                                modifier = Modifier.shadow(18.dp, CircleShape).clip(CircleShape)
-                                    .background(Color(0xFF2A2A2A)).border(1.dp, Hairline, CircleShape)
+                                modifier = Modifier
+                                    .shadow(18.dp, CircleShape)
+                                    .clip(CircleShape)
+                                    .background(ElevatedSurface)
+                                    .desktopSpecularRim(cornerRadius = 22.dp, topAlpha = 0.24f)
                                     .padding(horizontal = 20.dp, vertical = 11.dp),
-                                color = Color.White.copy(alpha = 0.92f),
+                                color = Color.White.copy(alpha = 0.94f),
                                 fontSize = 13.sp,
                             )
+                        }
+                    }
+                    if (controller.transferDropActive) {
+                        Box(
+                            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)).padding(48.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(
+                                Modifier.clip(RoundedCornerShape(32.dp)).background(PanelBackground)
+                                    .border(2.dp, Accent, RoundedCornerShape(32.dp))
+                                    .padding(horizontal = 56.dp, vertical = 40.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text("⇣", color = Accent, fontSize = 40.sp)
+                                Spacer(Modifier.height(10.dp))
+                                Text("松手导入加密文件", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(6.dp))
+                                Text("支持手机导出的 .cvpair / .cvsync", color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** Drag a .cvpair / .cvsync from Explorer onto the window to start an import. */
+@OptIn(ExperimentalComposeUiApi::class)
+private class TransferFileDropTarget(
+    private val controller: DesktopAppController,
+) : DragAndDropTarget {
+    override fun onEntered(event: DragAndDropEvent) {
+        controller.transferDropActive = true
+    }
+
+    override fun onExited(event: DragAndDropEvent) {
+        controller.transferDropActive = false
+    }
+
+    override fun onEnded(event: DragAndDropEvent) {
+        controller.transferDropActive = false
+    }
+
+    override fun onDrop(event: DragAndDropEvent): Boolean {
+        val files = (event.dragData() as? DragData.FilesList)?.readFiles().orEmpty()
+        val path = firstDroppedLocalFile(files)
+        controller.onFileDropped(path)
+        return path != null
     }
 }
 
@@ -163,16 +260,32 @@ internal fun WithDesktopUiFontSize(content: @Composable () -> Unit) {
 @Composable
 private fun DesktopNavigation(controller: DesktopAppController) {
     Column(
-        modifier = Modifier.width(108.dp).fillMaxHeight().background(NavigationBackground)
+        modifier = Modifier
+            .width(108.dp)
+            .fillMaxHeight()
+            .background(NavigationBackground)
             .border(width = 1.dp, color = Hairline),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(18.dp))
         Box(
-            Modifier.size(48.dp).clip(RoundedCornerShape(15.dp)).background(Accent),
+            Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .drawWithCache {
+                    val badgeBrush = Brush.linearGradient(
+                        colors = listOf(Color(0xFFC8DAFF), Color(0xFF7CA5F8)),
+                        start = Offset.Zero,
+                        end = Offset(size.width, size.height),
+                    )
+                    onDrawBehind { drawRect(brush = badgeBrush) }
+                }
+                .desktopSpecularRim(cornerRadius = 16.dp, topAlpha = 0.42f),
             contentAlignment = Alignment.Center,
-        ) { Text("CV", color = Color(0xFF10131A), fontWeight = FontWeight.Black, fontSize = 15.sp) }
-        Spacer(Modifier.height(22.dp))
+        ) { Text("CV", color = Color(0xFF0A1220), fontWeight = FontWeight.Black, fontSize = 15.sp) }
+        Spacer(Modifier.height(5.dp))
+        Text("Carbon", color = Accent.copy(alpha = 0.72f), fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+        Spacer(Modifier.height(18.dp))
         NavItem("⌂", "首页", controller.section == DesktopSection.Home) { controller.section = DesktopSection.Home }
         NavItem("▣", "银行卡", controller.section in setOf(DesktopSection.Wallet, DesktopSection.Editor)) {
             controller.section = DesktopSection.Wallet
@@ -182,91 +295,239 @@ private fun DesktopNavigation(controller: DesktopAppController) {
         }
         Spacer(Modifier.weight(1f))
         NavItem("⚙", "设置", controller.section == DesktopSection.Settings) { controller.section = DesktopSection.Settings }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
     }
 }
 
 @Composable
 private fun NavItem(symbol: String, label: String, selected: Boolean, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val background by animateColorAsState(
+        when {
+            selected -> Accent.copy(alpha = 0.14f)
+            hovered -> Color.White.copy(alpha = 0.06f)
+            else -> Color.Transparent
+        },
+        tween(150),
+        label = "nav-item-background",
+    )
+    val iconScale by animateFloatAsState(
+        if (hovered && !selected) 1.10f else 1f,
+        spring(dampingRatio = 0.72f, stiffness = 620f),
+        label = "nav-item-icon",
+    )
     Column(
-        Modifier.width(88.dp).clip(RoundedCornerShape(18.dp))
-            .background(if (selected) Color.White.copy(alpha = 0.09f) else Color.Transparent)
-            .clickable(onClick = onClick).padding(vertical = 8.dp),
+        Modifier
+            .width(88.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(background)
+            .then(
+                if (selected) Modifier.desktopSpecularRim(cornerRadius = 18.dp, topAlpha = 0.24f) else Modifier,
+            )
+            .hoverable(interactionSource)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(symbol, color = if (selected) Accent else Color.White.copy(alpha = 0.56f), fontSize = 18.sp)
+        Text(
+            symbol,
+            color = if (selected) Accent else Color.White.copy(alpha = if (hovered) 0.84f else 0.56f),
+            fontSize = 18.sp,
+            modifier = Modifier.graphicsLayer { scaleX = iconScale; scaleY = iconScale },
+        )
         Spacer(Modifier.height(2.dp))
-        Text(label, color = if (selected) Color.White else Color.White.copy(alpha = 0.48f), fontSize = 10.sp)
+        Text(
+            label,
+            color = if (selected) Color.White else Color.White.copy(alpha = if (hovered) 0.76f else 0.50f),
+            fontSize = 10.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        )
     }
     Spacer(Modifier.height(4.dp))
 }
 
 @Composable
+internal fun DesktopSearchBar(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    onClear: () -> Unit,
+) {
+    val iconColor = Color.White.copy(alpha = 0.52f)
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        placeholder = { Text(placeholder, fontSize = 12.sp, color = Color.White.copy(alpha = 0.40f)) },
+        singleLine = true,
+        leadingIcon = {
+            Canvas(modifier = Modifier.size(16.dp)) {
+                val stroke = 1.7.dp.toPx()
+                val r = size.minDimension * 0.33f
+                val center = Offset(size.width * 0.43f, size.height * 0.43f)
+                drawCircle(color = iconColor, radius = r, center = center, style = Stroke(width = stroke))
+                drawLine(
+                    color = iconColor,
+                    start = Offset(center.x + r * 0.72f, center.y + r * 0.72f),
+                    end = Offset(size.width * 0.88f, size.height * 0.88f),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round,
+                )
+            }
+        },
+        trailingIcon = {
+            if (value.isNotEmpty()) {
+                TextButton(onClick = onClear) {
+                    Text("清空", fontSize = 11.sp)
+                }
+            }
+        },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = ElevatedSurface,
+            unfocusedContainerColor = PanelBackground,
+            focusedBorderColor = Accent.copy(alpha = 0.68f),
+            unfocusedBorderColor = Hairline,
+        ),
+    )
+}
+
+@Composable
 private fun WalletScreen(controller: DesktopAppController, modifier: Modifier) {
     var deleteConfirmation by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val normalizedQuery = searchQuery.trim().lowercase()
+    val searching = normalizedQuery.isNotEmpty()
+    val searchResults = if (searching) {
+        controller.cards.filter { card ->
+            card.nickname.lowercase().contains(normalizedQuery) ||
+                card.lastFour.lowercase().contains(normalizedQuery) ||
+                (card.network?.label?.lowercase()?.contains(normalizedQuery) == true)
+        }
+    } else {
+        emptyList()
+    }
     val visibleCards = controller.cards.filter { it.folderId == controller.selectedCardFolderId }
     val children = controller.cardFolders.filter { it.parentFolderId == controller.selectedCardFolderId }
-    val entries = orderedDesktopWalletEntries(controller.cardWalletOrder,
-        children.map { DesktopWalletEntry(it.id, true) } + visibleCards.map { DesktopWalletEntry(it.id, false) })
+    val entries = orderedDesktopWalletEntries(
+        controller.cardWalletOrder,
+        children.map { DesktopWalletEntry(it.id, true) } + visibleCards.map { DesktopWalletEntry(it.id, false) },
+    )
     Row(modifier.fillMaxSize().padding(32.dp), horizontalArrangement = Arrangement.spacedBy(34.dp)) {
         Column(Modifier.width(470.dp).fillMaxHeight()) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
-                    Text("卡包", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
+                    Text("卡包", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
                     Text(
                         if (controller.cards.isEmpty()) "开始建立你的离线卡包" else "${controller.cards.size} 张银行卡",
-                        color = Color.White.copy(alpha = 0.46f),
+                        color = Color.White.copy(alpha = 0.48f),
                         fontSize = 13.sp,
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CircleAction("⇄") { controller.section = DesktopSection.Transfer }
-                    CircleAction("＋") { controller.startAdd() }
+                    CircleAction("⇄", emphasized = false) { controller.section = DesktopSection.Transfer }
+                    CircleAction("＋", emphasized = true) { controller.startAdd() }
                 }
             }
-            Spacer(Modifier.height(28.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                val selectedFolder = controller.cardFolders.firstOrNull { it.id == controller.selectedCardFolderId }
-                TextButton(enabled = selectedFolder != null,
-                    onClick = { controller.selectCardFolder(selectedFolder?.parentFolderId) },
-                    modifier = Modifier.weight(1f)) {
-                    Text(selectedFolder?.let { "‹ ${desktopFolderPath(controller.cardFolders, it.id)}" } ?: "全部分类", maxLines = 1)
-                }
-                DesktopNewFolderButton { name -> controller.createFolder(name, com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS, controller.selectedCardFolderId) }
+            if (controller.cards.isNotEmpty()) {
+                Spacer(Modifier.height(18.dp))
+                DesktopSearchBar(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = "搜索卡片昵称、卡组织或后四位…",
+                    onClear = { searchQuery = "" },
+                )
             }
             Spacer(Modifier.height(16.dp))
-            Text("拖动排序；在文件夹上停稳，显示「松手移入」后松手归档", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (entries.isEmpty()) {
-                EmptyWallet(controller)
+            if (searching) {
+                if (searchResults.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("未找到匹配的银行卡", color = Color.White.copy(alpha = 0.42f))
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Text(
+                            "跨全部分类找到 ${searchResults.size} 张卡片",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.48f),
+                        )
+                        searchResults.forEach { card ->
+                            CardFace(
+                                card = card,
+                                compact = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { controller.selectCard(card.id) },
+                            )
+                        }
+                    }
+                }
             } else {
-                DesktopMixedWalletStack(
-                    entries = entries,
-                    onOpen = { if (it.isFolder) controller.selectCardFolder(it.id) else controller.selectCard(it.id) },
-                    onReorder = { controller.reorderWalletEntries(com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS, it) },
-                    folderName = { id -> children.firstOrNull { it.id == id }?.name.orEmpty() },
-                    canMoveIntoFolder = { entry, destination -> canDropDesktopWalletEntry(entry, destination, controller.cardFolders) },
-                    onMoveIntoFolder = { entry, folder ->
-                        if (entry.isFolder) controller.moveFolder(entry.id, folder)
-                        else controller.moveCardToFolder(entry.id, folder)
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                ) { entry ->
-                    if (entry.isFolder) children.firstOrNull { it.id == entry.id }?.let { folder ->
-                        DesktopFolderWalletCard(folder, controller.cardFolders,
-                            countDesktopFolderTreeItems(controller.cardFolders, folder.id, controller.cards.map { it.folderId }),
-                            controller::renameFolder, controller::moveFolder, controller::deleteFolder, controller::setFolderColor)
-                    } else visibleCards.firstOrNull { it.id == entry.id }?.let { card ->
-                        CardFace(card, compact = true, modifier = Modifier.fillMaxWidth())
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    val selectedFolder = controller.cardFolders.firstOrNull { it.id == controller.selectedCardFolderId }
+                    TextButton(
+                        enabled = selectedFolder != null,
+                        onClick = { controller.selectCardFolder(selectedFolder?.parentFolderId) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(selectedFolder?.let { "‹ ${desktopFolderPath(controller.cardFolders, it.id)}" } ?: "全部分类", maxLines = 1)
+                    }
+                    DesktopNewFolderButton { name ->
+                        controller.createFolder(name, com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS, controller.selectedCardFolderId)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "拖动排序；在文件夹上停稳，显示「松手移入」后松手归档",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                if (entries.isEmpty()) {
+                    EmptyWallet(controller)
+                } else {
+                    DesktopMixedWalletStack(
+                        entries = entries,
+                        onOpen = { if (it.isFolder) controller.selectCardFolder(it.id) else controller.selectCard(it.id) },
+                        onReorder = { controller.reorderWalletEntries(com.pdh.cardvault.desktop.model.DesktopFolderKind.CARDS, it) },
+                        folderName = { id -> children.firstOrNull { it.id == id }?.name.orEmpty() },
+                        canMoveIntoFolder = { entry, destination -> canDropDesktopWalletEntry(entry, destination, controller.cardFolders) },
+                        onMoveIntoFolder = { entry, folder ->
+                            if (entry.isFolder) controller.moveFolder(entry.id, folder)
+                            else controller.moveCardToFolder(entry.id, folder)
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    ) { entry ->
+                        if (entry.isFolder) children.firstOrNull { it.id == entry.id }?.let { folder ->
+                            DesktopFolderWalletCard(
+                                folder,
+                                controller.cardFolders,
+                                countDesktopFolderTreeItems(controller.cardFolders, folder.id, controller.cards.map { it.folderId }),
+                                controller::renameFolder,
+                                controller::moveFolder,
+                                controller::deleteFolder,
+                                controller::setFolderColor,
+                            )
+                        } else visibleCards.firstOrNull { it.id == entry.id }?.let { card ->
+                            CardFace(card, compact = true, modifier = Modifier.fillMaxWidth())
+                        }
                     }
                 }
             }
         }
 
         Box(
-            Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(32.dp))
-                .background(PanelBackground).border(1.dp, Hairline, RoundedCornerShape(32.dp)),
+            Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(32.dp))
+                .background(PanelBackground)
+                .desktopSpecularRim(cornerRadius = 32.dp, topAlpha = 0.20f),
         ) {
             controller.selectedCard?.let { card ->
                 CardDetailPanel(
@@ -276,14 +537,18 @@ private fun WalletScreen(controller: DesktopAppController, modifier: Modifier) {
                     onEdit = { scope.launch { controller.startEdit(card.id) } },
                     onCopyAsNew = { controller.startCopy(card.id) },
                     moveControl = {
-                        DesktopRecordMoveButton(controller.cardFolders, card.folderId,
+                        DesktopRecordMoveButton(
+                            controller.cardFolders,
+                            card.folderId,
                             enabled = controller.authenticatingAction == null,
-                            onMove = { controller.moveCardToFolder(card.id, it) })
+                            onMove = { controller.moveCardToFolder(card.id, it) },
+                        )
                     },
                     onDelete = { deleteConfirmation = true },
                     onAuthorizeReveal = { controller.authorizeReveal(card.id) },
                     onConceal = { controller.concealCard(card.id) },
                     onCopy = { controller.copyCardNumber(card.id) },
+                    onCopyNote = { controller.copyCardNote(card.id) },
                 )
             } ?: Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("选择一张卡片", color = Color.White.copy(alpha = 0.38f))
@@ -342,7 +607,6 @@ private fun WalletStack(
                     .offset(y = y)
                     .zIndex(index.toFloat() + if (dragY != 0f) 100f else 0f)
                     .graphicsLayer { scaleX = scale; scaleY = scale }
-                    .shadow(if (selected) 22.dp else 12.dp, RoundedCornerShape(28.dp))
                     .onGloballyPositioned { if (dragX == 0f && dragY == 0f) origin = it.boundsInRoot().topLeft }
                     .clickable { onSelect(card.id) }
                     .pointerInput(card.id, cards.size) {
@@ -387,13 +651,22 @@ private fun CardDetailPanel(
     onAuthorizeReveal: suspend () -> Boolean,
     onConceal: () -> Unit,
     onCopy: () -> Unit,
+    onCopyNote: () -> Unit,
 ) {
     var flipped by remember(card.id) { mutableStateOf(false) }
     var revealed by remember(card.id) { mutableStateOf(false) }
+    var initialEpoch by remember(card.id) { mutableLongStateOf(concealmentEpoch) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(card.id, concealmentEpoch) {
-        flipped = false
+    LaunchedEffect(card.id) {
+        flipped = true
         revealed = false
+    }
+    LaunchedEffect(concealmentEpoch) {
+        if (concealmentEpoch != initialEpoch) {
+            initialEpoch = concealmentEpoch
+            flipped = false
+            revealed = false
+        }
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(34.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -439,6 +712,12 @@ private fun CardDetailPanel(
             fontSize = 11.sp,
         )
         Spacer(Modifier.height(12.dp))
+        if (card.notes.isNotBlank()) {
+            OutlinedButton(onClick = onCopyNote, enabled = !authenticating, modifier = Modifier.fillMaxWidth()) {
+                Text("复制备注")
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         moveControl()
         OutlinedButton(onClick = onCopyAsNew, enabled = !authenticating, modifier = Modifier.fillMaxWidth()) {
             Text("以此卡新建")
@@ -450,7 +729,7 @@ private fun CardDetailPanel(
 private fun EmptyWallet(controller: DesktopAppController) {
     Box(
         Modifier.fillMaxSize().clip(RoundedCornerShape(30.dp)).background(Color.White.copy(alpha = 0.025f))
-            .border(1.dp, Hairline, RoundedCornerShape(30.dp)),
+            .desktopSpecularRim(cornerRadius = 30.dp, topAlpha = 0.16f),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -466,12 +745,37 @@ private fun EmptyWallet(controller: DesktopAppController) {
 }
 
 @Composable
-private fun CircleAction(label: String, onClick: () -> Unit) {
+private fun CircleAction(label: String, emphasized: Boolean = false, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = when {
+            pressed -> 0.92f
+            hovered -> 1.05f
+            else -> 1f
+        },
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 640f),
+        label = "circle-action-scale",
+    )
     Box(
-        Modifier.size(54.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))
-            .border(1.dp, Hairline, CircleShape).clickable(onClick = onClick),
+        Modifier
+            .size(50.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(CircleShape)
+            .background(if (emphasized) Accent else ElevatedSurface)
+            .desktopSpecularRim(cornerRadius = 25.dp, topAlpha = if (emphasized) 0.38f else 0.22f)
+            .hoverable(interactionSource)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Text(label, fontSize = 20.sp) }
+    ) {
+        Text(
+            text = label,
+            fontSize = 19.sp,
+            fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Medium,
+            color = if (emphasized) Color(0xFF0A1220) else Color.White,
+        )
+    }
 }
 
 @Composable
@@ -484,6 +788,12 @@ private fun TransferScreen(controller: DesktopAppController, modifier: Modifier)
         Text("离线同步", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         Text("通过微信等工具传输端到端加密文件；CardVault 本身不会联网。", color = Color.White.copy(alpha = 0.48f))
+        Spacer(Modifier.height(6.dp))
+        Text(
+            desktopLastSyncLabel(controller.lastSyncAtEpochMillis) + "  ·  也可以把 .cvpair / .cvsync 文件直接拖进窗口",
+            color = Color.White.copy(alpha = 0.38f),
+            fontSize = 11.sp,
+        )
         if (controller.syncKeyEpoch > 0L) {
             Spacer(Modifier.height(6.dp))
             Text("同步密钥代次：${controller.syncKeyEpoch}", color = Color.White.copy(alpha = 0.38f), fontSize = 11.sp)
@@ -656,14 +966,27 @@ private fun TransferScreen(controller: DesktopAppController, modifier: Modifier)
     }
 }
 
+internal fun desktopLastSyncLabel(
+    lastSyncAtEpochMillis: Long?,
+    nowEpochMillis: Long = System.currentTimeMillis(),
+): String {
+    if (lastSyncAtEpochMillis == null) return "尚未与其他设备同步或导出过加密备份"
+    val days = BackupReminderPolicy.daysBetween(lastSyncAtEpochMillis, nowEpochMillis)
+    return if (days == 0) "上次与其他设备同步：今天" else "上次与其他设备同步：$days 天前"
+}
+
 @Composable
 private fun TransferPanel(title: String, description: String, modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        modifier.clip(RoundedCornerShape(28.dp)).background(PanelBackground).border(1.dp, Hairline, RoundedCornerShape(28.dp)).padding(26.dp),
+        modifier
+            .clip(RoundedCornerShape(28.dp))
+            .background(PanelBackground)
+            .desktopSpecularRim(cornerRadius = 28.dp, topAlpha = 0.20f)
+            .padding(26.dp),
     ) {
         Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(7.dp))
-        Text(description, color = Color.White.copy(alpha = 0.44f), fontSize = 12.sp)
+        Text(description, color = Color.White.copy(alpha = 0.48f), fontSize = 12.sp)
         Spacer(Modifier.height(22.dp))
         content()
     }
@@ -672,8 +995,48 @@ private fun TransferPanel(title: String, description: String, modifier: Modifier
 @Composable
 private fun SettingsScreen(controller: DesktopAppController, modifier: Modifier) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(42.dp)) {
-        Text("设置", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(30.dp))
+        Text("设置", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(24.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .drawWithCache {
+                    val bannerBrush = Brush.linearGradient(
+                        colors = listOf(Color(0xFF18253A), Color(0xFF121A28)),
+                        start = Offset.Zero,
+                        end = Offset(size.width, size.height),
+                    )
+                    val accentGlow = Brush.radialGradient(
+                        colors = listOf(Accent.copy(alpha = 0.20f), Color.Transparent),
+                        center = Offset(size.width * 0.14f, size.height * 0.20f),
+                        radius = size.maxDimension * 0.65f,
+                    )
+                    onDrawBehind {
+                        drawRect(brush = bannerBrush)
+                        drawRect(brush = accentGlow)
+                    }
+                }
+                .desktopSpecularRim(cornerRadius = 24.dp, topAlpha = 0.28f)
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.size(8.dp).background(Accent, CircleShape))
+                Text(
+                    text = DesktopAppInfo.editionLabel,
+                    color = Accent,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "${DesktopAppInfo.settingsLabel}  ·  零帧延迟翻面 · 静态缓存光影引擎 · 完整兼容 v1.8.0 (Claude) 加密数据与同步文件",
+                color = Color.White.copy(alpha = 0.58f),
+                fontSize = 11.sp,
+            )
+        }
+        Spacer(Modifier.height(18.dp))
         SettingsCard(
             title = "设备间同步",
             value = "打开",
@@ -689,10 +1052,10 @@ private fun SettingsScreen(controller: DesktopAppController, modifier: Modifier)
         Spacer(Modifier.height(12.dp))
         SettingsCard("数据交换", "加密文件", "仅在你主动同步时生成或读取密文文件")
         Spacer(Modifier.height(30.dp))
-        Text("CardVault 1.5.6  ·  Windows", color = Color.White.copy(alpha = 0.3f), fontSize = 11.sp)
+        Text(DesktopAppInfo.settingsLabel, color = Color.White.copy(alpha = 0.48f), fontSize = 11.sp)
         Text(
             "本地数据目录：${EncryptedDesktopVault.defaultDirectory()}",
-            color = Color.White.copy(alpha = 0.22f),
+            color = Color.White.copy(alpha = 0.24f),
             fontSize = 10.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -713,17 +1076,20 @@ private fun SettingsCard(
         Modifier.clickable(onClick = onClick)
     }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(PanelBackground)
-            .border(1.dp, Hairline, RoundedCornerShape(20.dp))
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(PanelBackground)
+            .desktopSpecularRim(cornerRadius = 20.dp, topAlpha = 0.18f)
             .then(interactionModifier)
             .padding(horizontal = 20.dp, vertical = 17.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.Medium)
-            Text(detail, color = Color.White.copy(alpha = 0.38f), fontSize = 11.sp)
+            Text(detail, color = Color.White.copy(alpha = 0.42f), fontSize = 11.sp)
         }
-        Text(value, color = Accent, fontSize = 12.sp)
+        Text(value, color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
 

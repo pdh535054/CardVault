@@ -2,7 +2,7 @@
 
 **Offline encrypted card and address vault for Android and Windows.**
 
-当前版本：Android 1.6.5 / Windows 1.6.5
+当前版本：Android 1.9.1 / Windows 1.9.1（Gemini 4 Carbon Edition · 120Hz 极速流光版；[GitHub Releases](https://github.com/pdh535054/CardVault/releases) 同时归档提供 Claude Opus 5.5 优化版 `1.8.0`）
 
 安装包和历史版本见 [GitHub Releases](https://github.com/pdh535054/CardVault/releases)。每次发布附带 SHA-256；历史安装包归档若没有对应时点的独立源码快照，会在发布说明中标注。
 
@@ -17,7 +17,7 @@ CardVault 不连接服务器，也不在应用中使用网络。Android 和 Wind
 - Android 点击眼睛后通过系统 `BiometricPrompt`（强生物识别或设备凭据）认证，再短时显示完整信息。
 - Windows 使用系统 `UserConsentVerifier` / Windows Hello 验证敏感显示、编辑、删除和导入导出操作。
 - 完整卡号可以复制；Android 与 Windows 都会在限定时间后尝试清除仍由 CardVault 持有的剪贴板内容。CVV 不提供复制按钮。
-- 16 套预设颜色、18 套原创花纹、9 种名称版式、名称颜色和 HSV 自定义调色板均为本地绘制。
+- 内置 20 套精选一键预设风格、28 套精选颜色、30 套几何花纹与艺术图案、9 种名称版式、14 种名称颜色以及 HSV 自定义调色板，全部本地零分配缓存绘制；堆叠卡片与文件夹边缘纯净无黑色投影。
 - 可选备注只显示在卡片背面右下角。
 - 卡片详情的“以此卡新建”复用名称、发行方、备注和完整卡面设计；卡号、有效期与 CVV 留空。新表单可选择原文件夹、其他文件夹或未归档，保存后创建独立记录，原卡不变。
 - 卡片支持单击详情、平滑翻转以及长按拖动排序。
@@ -29,6 +29,11 @@ CardVault 不连接服务器，也不在应用中使用网络。Android 和 Wind
 - 银行卡与地址都支持原创配色、花纹、名称版式和自定义颜色。
 - 应用退到后台或 Windows 窗口失焦/最小化时立即隐藏已显示的敏感内容。
 - Android 进入应用只显示掩码内容，不要求启动认证；切换应用后返回会保留未保存的添加或编辑草稿。查看完整卡号、CVV，以及编辑和删除仍要求一次系统身份认证。
+- 卡片备注可以全选复制，也可用“复制”/“复制备注”按钮一键复制（备注按普通文本处理，不会自动清除）；卡号、有效期和 CVV 输入框仍禁止复制。
+- 银行卡搜索支持卡片名称、发卡行和卡号尾号，多个关键词用空格分隔；地址簿支持按名称搜索。搜索只使用卡面上本来就显示的信息，不解密敏感字段。
+- 添加或编辑银行卡时，如果卡包里已有同尾号、同卡组织的卡片，会提示可能重复（不阻止保存）。
+- 备份提醒：卡包有数据但从未与其他设备同步，或距上次同步超过 30 天时，首页会提醒导出加密备份，可选择 7 天后再提醒。同步页显示上次同步时间。
+- 导入配对文件时可一键“粘贴配对码”，会自动从整段聊天文字中识别 `CVP1-…` 配对码。Windows 端可以把 `.cvpair` / `.cvsync` 文件直接拖进窗口导入。
 
 ## 离线双向同步
 
@@ -47,11 +52,18 @@ CardVault 不连接服务器，也不在应用中使用网络。Android 和 Wind
 4. Windows 打开“同步”，选择下载好的 `.cvpair` 文件，并输入手机上显示的一次性配对码。
 5. 后续任一端生成 `.cvsync` 文件，另一端导入即可。
 
-配对码不要和 `.cvpair` 文件放在同一条转发消息中。配对文件默认 30 分钟过期；丢失配对码时可在任一已配对设备重新生成新的配对文件。
+配对码不要和 `.cvpair` 文件放在同一条转发消息中。配对文件 7 天内有效；丢失配对码时可在任一已配对设备重新生成新的配对文件。
 
 ### Windows 导出
 
-Windows 端先选择并记住导出文件夹，再点击导出。CardVault 会把加密文件原子写入该目录；用户随后可用微信发送到手机。Android 通过系统文件选择器导入，应用无需存储权限。
+Windows 端先选择并记住导出文件夹，再点击导出。CardVault 会把加密文件原子写入该目录；用户随后可用微信发送到手机。
+
+### Android 导入
+
+- 推荐：在微信、QQ 或文件管理中点开 `.cvpair` / `.cvsync`，选择「用其他应用打开」或「分享」→ CardVault，应用会直接进入“设备间同步”并读取该文件。
+- 也可在“设备间同步”点“选择文件”（系统应用选择器，可使用手机自带文件管理）或“改用系统文档选择器”。任一选择器不可用时会自动改用另一种，均不可用时给出提示而不会闪退。
+- 读入配对文件后切换到其他应用复制配对码，已选择的加密文件会保留，已输入的配对码会清空。
+- Android 导出后除“打开系统分享”外，还可“另存到手机”。应用无需存储权限。
 
 ### 合并规则
 
@@ -85,9 +97,33 @@ Android 本地 DEK、Windows 本地 DEK 和跨设备同步密钥彼此独立。�
 
 Android 源 Manifest 不申请 `INTERNET`、`ACCESS_NETWORK_STATE`、位置、相机、麦克风、联系人、短信、电话、通知、存储或媒体权限。应用不包含 Firebase、广告、Analytics、Crash SDK、WebView 或网络库。
 
-Android 使用不可导出的 `FileProvider`，只为系统分享临时授予单个加密文件的读取 URI；导入使用 Storage Access Framework。`android:allowBackup="false"`，系统备份规则排除数据库、设置和文件。
+Android 使用不可导出的 `FileProvider`，只为系统分享临时授予单个加密文件的读取 URI；导入使用 Storage Access Framework，或接收其他应用通过「用其他应用打开 / 分享」临时授权的 `content://` 文件（只接受 `content://`，导入前仍需配对码和系统身份认证）。`android:allowBackup="false"`，系统备份规则排除数据库、设置和文件。
 
 Windows 端不执行 HTTP 请求。微信、QQ 或邮件只承担用户选择的密文传输，不属于 CardVault 的网络同步。
+
+## 项目结构
+
+```text
+银行卡管理app/
+├─ app/                 Android 应用（Kotlin + Jetpack Compose）
+│  ├─ src/main/         源码、资源、AndroidManifest.xml
+│  ├─ src/test/         单元测试（含 Manifest 安全策略测试）
+│  └─ schemas/          Room 数据库结构快照
+├─ desktopApp/          Windows 应用（Compose Desktop）
+├─ sync-core/           Android 与 Windows 共用的加密同步协议
+├─ gradle/              Gradle Wrapper 与依赖版本目录（libs.versions.toml）
+├─ dist/                本地安装包按模型分类目录（不进入 Git，见 dist/README.md）
+│  ├─ Gemini-4-Carbon/  Gemini 4 Carbon 优化版（v1.9.1 Android APK + Windows 安装器 + SHA256）
+│  ├─ Claude-Opus-5.5/  Claude Opus 5.5 优化版（v1.8.0 Android APK + Windows 安装器 + SHA256）
+│  └─ archive/          未在 GitHub Releases 上的历史安装包
+├─ .tools/              本机便携构建工具链与签名密钥（不进入 Git，见 .tools/README.md）
+├─ build.gradle.kts / settings.gradle.kts / gradle.properties
+├─ local.properties     本机 Android SDK 路径（不进入 Git）
+├─ LICENSE
+└─ README.md
+```
+
+历史版本安装包统一在 [GitHub Releases](https://github.com/pdh535054/CardVault/releases) 下载，本地不再重复保存。
 
 ## 构建工具链
 
@@ -104,36 +140,30 @@ Windows 端不执行 HTTP 请求。微信、QQ 或邮件只承担用户选择的
 | Android targetSdk / minSdk | 36 / 30 |
 | Windows 打包 JDK | Temurin 21 |
 
-Android 命令行构建可只为当前 PowerShell 会话设置 Android Studio JBR：
+本机已在 `.tools/` 中准备好便携 JDK 21、Android SDK 和 WiX 3.11，无需修改系统环境变量。在项目根目录的 PowerShell 中先为当前会话设置：
 
 ```powershell
-$env:JAVA_HOME = "<Android Studio>\jbr"
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
-.\gradlew.bat assembleDebug
-.\gradlew.bat test
-.\gradlew.bat lint
-.\gradlew.bat assembleRelease
+$env:JAVA_HOME = "$PWD\.tools\temurin21\jdk-21.0.11+10"
+$env:Path = "$env:JAVA_HOME\bin;$PWD\.tools\wix311;$env:Path"
 ```
 
-Windows 开发验证：
+完整验证并生成两端安装包：
 
 ```powershell
-.\gradlew.bat :desktopApp:test :desktopApp:compileKotlin
+.\gradlew.bat :sync-core:test :desktopApp:test :app:testDebugUnitTest :app:lintDebug :app:assembleRelease :desktopApp:packageExe --offline --no-daemon
 ```
 
-Windows 安装器需要带 `jpackage` 的完整 JDK 21；生成 EXE/MSI 还需要 WiX 3.x。工具可以使用便携 ZIP，无需安装或修改系统环境变量。
+- Android 签名 APK：`app/build/outputs/apk/release/app-release.apk` → 复制为 `dist/Gemini-4-Carbon/Android/CardVault-<版本>-Gemini-Android.apk`
+- Windows 安装器：`desktopApp/build/compose/binaries/main/exe/CardVault-<版本>.exe` → 复制为 `dist/Gemini-4-Carbon/Windows/CardVault-<版本>-Gemini-Windows-Setup.exe`
+- 发布后更新对应模型目录下的 `SHA256SUMS.txt`，并可删除 `build/`、`*/build/`、`.gradle/`、`.kotlin/` 保持目录整洁。
 
-```powershell
-.\gradlew.bat :desktopApp:createDistributable
-.\gradlew.bat :desktopApp:packageExe
-.\gradlew.bat :desktopApp:packageMsi
-```
+版本号位置：Android 在 `app/build.gradle.kts`（`versionCode` / `versionName`），Windows 在 `desktopApp/build.gradle.kts`（`version`，安装器版本和界面显示版本都从这里生成）。
 
 ## 构建产物
 
 为避免源码仓库混入不透明的二进制文件，APK、AAB、EXE、MSI 和本地 `dist/` 目录不进入 Git 历史。正式对外提供的构建产物应作为 GitHub Release 附件发布，并同时公布 SHA-256 校验值。
 
-当前 Android 交付包为不可调试、已压缩的 Release APK，但使用本机标准 Android 调试证书签名，仅适合个人安装验证；应用商店发布应在仓库外使用长期保管的正式发布密钥重新签名。仓库不包含 Android 正式发布密钥或 Windows 代码签名证书，因此 Windows 安装器可能显示“未知发布者”。
+Android Release APK 不可调试、已压缩。从 1.6.6 起使用 CardVault 专用发布密钥签名（`.tools/signing/`，不进入 Git），此后的版本可以直接覆盖升级；1.6.5 及更早版本使用的是已丢失的临时调试证书，升级到 1.6.6 时需要先卸载旧版，再通过加密同步文件导回数据。仓库不包含任何签名密钥或 Windows 代码签名证书，因此 Windows 安装器可能显示“未知发布者”。
 
 ## 数据恢复与注意事项
 

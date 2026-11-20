@@ -59,6 +59,37 @@ class SourceManifestSecurityTest {
         assertEquals("${'$'}{applicationId}.sync-files", provider.androidAttribute("authorities"))
     }
 
+    @Test
+    fun inboundTransferFiltersAcceptOnlyViewAndSendIntents() {
+        val activity = manifest.elements("activity").single()
+        val filters = activity.getElementsByTagName("intent-filter")
+        val actions = (0 until filters.length).flatMap { index ->
+            val filter = filters.item(index) as Element
+            val actionNodes = filter.getElementsByTagName("action")
+            (0 until actionNodes.length).map { actionIndex ->
+                (actionNodes.item(actionIndex) as Element).androidAttribute("name")
+            }
+        }.toSet()
+
+        assertEquals(
+            setOf(
+                "android.intent.action.MAIN",
+                "android.intent.action.VIEW",
+                "android.intent.action.SEND",
+            ),
+            actions,
+        )
+        val schemes = manifest.elements("data")
+            .map { element -> element.androidAttribute("scheme") }
+            .filter(String::isNotBlank)
+            .toSet()
+        assertEquals(
+            "Inbound VIEW intents must be limited to content:// URIs.",
+            setOf("content"),
+            schemes,
+        )
+    }
+
     private fun Element.androidAttribute(name: String): String =
         getAttributeNS(androidNamespace, name)
 }

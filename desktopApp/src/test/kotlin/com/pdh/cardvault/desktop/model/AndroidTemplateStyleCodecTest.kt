@@ -27,4 +27,27 @@ class AndroidTemplateStyleCodecTest {
         assertEquals("legacy-unknown", decoded.sourceTemplateId)
         assertTrue(AndroidTemplateStyleCodec.encode(decoded).startsWith("custom:"))
     }
+
+    @Test
+    fun `all 28 palettes 30 patterns and 20 curated presets round trip cleanly`() {
+        assertEquals(28, CoverPalettes.all.size)
+        assertEquals(30, CardPattern.entries.size)
+        assertEquals(20, DesktopCardPresets.all.size)
+
+        DesktopCardPresets.all.forEach { preset ->
+            assertEquals(preset.templateId, AndroidTemplateStyleCodec.encode(preset.style))
+            val reEncoded = AndroidTemplateStyleCodec.encode(preset.style.copy(sourceTemplateId = null))
+            assertEquals(preset.templateId, reEncoded)
+        }
+
+        val newPatternIds = listOf(
+            "prism", "sunburst", "mountains", "lotus", "constellation", "compass",
+            "scales", "honeycomb", "chevrons", "silk", "beams", "monolith",
+        )
+        newPatternIds.forEach { patternId ->
+            val id = "custom:v2:titanium:$patternId:editorial:amber"
+            val decoded = AndroidTemplateStyleCodec.decode(id)
+            assertEquals(id, AndroidTemplateStyleCodec.encode(decoded.copy(sourceTemplateId = null)))
+        }
+    }
 }

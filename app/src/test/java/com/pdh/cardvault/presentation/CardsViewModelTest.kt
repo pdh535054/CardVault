@@ -151,7 +151,7 @@ class CardsViewModelTest {
     }
 
     @Test
-    fun selectedFolderAndLastFourSearchSurviveDetailReturnButClearOnVaultLock() {
+    fun selectedFolderAndCardSearchSurviveDetailReturnButClearOnVaultLock() {
         val fixture = fixture(unlock = false)
         val folderId = fixture.repository.seedFolder("Synthetic group")
         val recordId = fixture.repository.seed(
@@ -161,24 +161,24 @@ class CardsViewModelTest {
         fixture.viewModel.onVaultAccessAllowed {}
 
         fixture.viewModel.selectWalletFolder(folderId)
-        fixture.viewModel.updateLastFourSearchQuery("1x2-3 4")
+        fixture.viewModel.updateCardSearchQuery("   招商\t\t 1234")
         assertEquals(folderId, fixture.viewModel.uiState.value.selectedFolderId)
-        assertEquals("1234", fixture.viewModel.uiState.value.lastFourSearchQuery)
+        assertEquals("招商 1234", fixture.viewModel.uiState.value.cardSearchQuery)
         assertEquals("1234", fixture.viewModel.uiState.value.cards.single().lastFour)
 
         fixture.viewModel.loadCardDetail(recordId.toString())
         fixture.viewModel.clearCardDetail()
         assertEquals(folderId, fixture.viewModel.uiState.value.selectedFolderId)
-        assertEquals("1234", fixture.viewModel.uiState.value.lastFourSearchQuery)
+        assertEquals("招商 1234", fixture.viewModel.uiState.value.cardSearchQuery)
 
         fixture.viewModel.selectWalletFolder(null)
         assertNull(fixture.viewModel.uiState.value.selectedFolderId)
-        assertEquals("", fixture.viewModel.uiState.value.lastFourSearchQuery)
+        assertEquals("", fixture.viewModel.uiState.value.cardSearchQuery)
 
-        fixture.viewModel.updateLastFourSearchQuery("98765")
-        assertEquals("9876", fixture.viewModel.uiState.value.lastFourSearchQuery)
+        fixture.viewModel.updateCardSearchQuery("x".repeat(80))
+        assertEquals(40, fixture.viewModel.uiState.value.cardSearchQuery.length)
         fixture.viewModel.onVaultAccessRevoked()
-        assertEquals("", fixture.viewModel.uiState.value.lastFourSearchQuery)
+        assertEquals("", fixture.viewModel.uiState.value.cardSearchQuery)
     }
 
     @Test

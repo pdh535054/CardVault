@@ -24,11 +24,25 @@ object AndroidTemplateStyleCodec {
         "coral" to Palette(0xFFF18A75.toInt(), 0xFF87352F.toInt(), 0xFFFFC1AE.toInt(), 0xFFFFF7F4.toInt()),
         "pearl" to Palette(0xFFFFFAF3.toInt(), 0xFFD9CCC2.toInt(), 0xFFFFFFFF.toInt(), 0xFF29221F.toInt()),
         "magenta" to Palette(0xFFB34D87.toInt(), 0xFF43162F.toInt(), 0xFFFFA7D0.toInt(), 0xFFFFF5FA.toInt()),
+        "titanium" to Palette(0xFF8A8E96.toInt(), 0xFF343840.toInt(), 0xFFE4E7ED.toInt(), 0xFFF8FAFC.toInt()),
+        "rosegold" to Palette(0xFFE8B4AC.toInt(), 0xFF9C5E58.toInt(), 0xFFFFDFD9.toInt(), 0xFF261210.toInt()),
+        "bronze" to Palette(0xFF8C6239.toInt(), 0xFF2E1C0E.toInt(), 0xFFE8C090.toInt(), 0xFFFFF7ED.toInt()),
+        "emerald" to Palette(0xFF0F8A5F.toInt(), 0xFF042E20.toInt(), 0xFF7CF2C2.toInt(), 0xFFF0FFF8.toInt()),
+        "sapphire" to Palette(0xFF1E4F9C.toInt(), 0xFF061638.toInt(), 0xFF82B8FF.toInt(), 0xFFF2F7FF.toInt()),
+        "crimson" to Palette(0xFFB8293D.toInt(), 0xFF3B0812.toInt(), 0xFFFF9CA8.toInt(), 0xFFFFF5F6.toInt()),
+        "amber" to Palette(0xFFD98A2B.toInt(), 0xFF572B08.toInt(), 0xFFFFD996.toInt(), 0xFFFFFAF0.toInt()),
+        "indigo" to Palette(0xFF3B358C.toInt(), 0xFF0E0B2E.toInt(), 0xFFB3AEFF.toInt(), 0xFFF5F4FF.toInt()),
+        "cyber" to Palette(0xFF143A4A.toInt(), 0xFF060E17.toInt(), 0xFF00F0FF.toInt(), 0xFFEFFFFF.toInt()),
+        "sakura" to Palette(0xFFFAD4DF.toInt(), 0xFFC7859A.toInt(), 0xFFFFF0F5.toInt(), 0xFF2B121B.toInt()),
+        "matcha" to Palette(0xFFA8C99B.toInt(), 0xFF56784C.toInt(), 0xFFE5F7DC.toInt(), 0xFF152412.toInt()),
+        "sandstone" to Palette(0xFFD9C2A7.toInt(), 0xFF8C6F52.toInt(), 0xFFFFF2E2.toInt(), 0xFF261B11.toInt()),
     )
     private val nameColors = mapOf(
         "ivory" to 0xFFFFF8E8.toInt(), "ink" to 0xFF111318.toInt(), "gold" to 0xFFFFD166.toInt(),
         "silver" to 0xFFE3EAF2.toInt(), "ice" to 0xFF87D9FF.toInt(), "mint" to 0xFF8CE8C5.toInt(),
         "rose" to 0xFFFF9DB6.toInt(), "violet" to 0xFFD7B7FF.toInt(), "coral" to 0xFFFFA080.toInt(),
+        "amber" to 0xFFFFB347.toInt(), "cyan" to 0xFF5CEEFF.toInt(), "crimson" to 0xFFFF6B7A.toInt(),
+        "platinum" to 0xFFB8C2CC.toInt(),
     )
 
     fun decode(templateId: String): CardCoverStyle {
@@ -118,6 +132,10 @@ object AndroidTemplateStyleCodec {
         "ribbons" to CardPattern.Ribbons, "halos" to CardPattern.Halos, "dots" to CardPattern.Dots,
         "arches" to CardPattern.Arches, "frame" to CardPattern.Frame, "loops" to CardPattern.Loops,
         "tiles" to CardPattern.Tiles, "arcs" to CardPattern.Arcs, "continuous" to CardPattern.Continuous,
+        "prism" to CardPattern.Prism, "sunburst" to CardPattern.Sunburst, "mountains" to CardPattern.Mountains,
+        "lotus" to CardPattern.Lotus, "constellation" to CardPattern.Constellation, "compass" to CardPattern.Compass,
+        "scales" to CardPattern.Scales, "honeycomb" to CardPattern.Honeycomb, "chevrons" to CardPattern.Chevrons,
+        "silk" to CardPattern.Silk, "beams" to CardPattern.Beams, "monolith" to CardPattern.Monolith,
     )
     private val TYPOGRAPHY = mapOf(
         "modern" to NicknameTypography.Modern, "editorial" to NicknameTypography.Editorial,

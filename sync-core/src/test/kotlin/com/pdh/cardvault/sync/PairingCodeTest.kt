@@ -36,4 +36,26 @@ class PairingCodeTest {
             assertEquals(16, material.secret.size)
         }
     }
+
+    @Test
+    fun `pairing code is found inside pasted chat text and canonicalised`() {
+        val canonical = "CVP1-AAAQE-AYEAU-DAOCA-JBIFQ-YDIOB4"
+        assertEquals(canonical, PairingCode.findIn(canonical))
+        assertEquals(canonical, PairingCode.findIn("配对码：cvp1-aaaqe ayeau-daoca-jbifq-ydiob4，请勿转发"))
+        assertEquals(canonical, PairingCode.findIn("CVP1AAAQEAYEAUDAOCAJBIFQYDIOB4"))
+        assertContentEquals(ByteArray(16) { it.toByte() }, PairingCode.decode(PairingCode.findIn(" $canonical\n")!!))
+    }
+
+    @Test
+    fun `text without a complete pairing code yields null`() {
+        listOf(
+            null,
+            "",
+            "   ",
+            "没有配对码",
+            "CVP1-AAAQE-AYEAU-DAOCA-JBIFQ-YDIOB",
+            "CVP1-AAAQE-AYEAU-DAOCA-JBIFQ-YDIOB4X",
+            "CVP2-AAAQE-AYEAU-DAOCA-JBIFQ-YDIOB4",
+        ).forEach { candidate -> assertEquals(null, PairingCode.findIn(candidate)) }
+    }
 }

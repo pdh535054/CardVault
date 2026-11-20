@@ -1,5 +1,6 @@
 package com.pdh.cardvault.ui.screen
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,17 +20,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.pdh.cardvault.R
 import com.pdh.cardvault.security.auth.AuthenticationOutcome
+import com.pdh.cardvault.ui.theme.pressScale
+import com.pdh.cardvault.ui.theme.specularRim
 
 @Suppress("UNUSED_PARAMETER")
 @Composable
@@ -61,6 +64,8 @@ fun SettingsScreen(
                 .padding(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            EditionBannerCard()
+
             Text(
                 text = stringResource(R.string.settings_security_heading),
                 style = MaterialTheme.typography.titleMedium,
@@ -68,7 +73,9 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Surface(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .specularRim(cornerRadius = 32.dp, topAlpha = 0.16f),
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surfaceContainer,
             ) {
@@ -100,12 +107,18 @@ fun SettingsScreen(
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            val transferInteraction = remember { MutableInteractionSource() }
             Surface(
                 onClick = onOpenVaultTransfer,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pressScale(transferInteraction)
+                    .specularRim(cornerRadius = 32.dp, topAlpha = 0.20f),
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 contentColor = MaterialTheme.colorScheme.onSurface,
+                interactionSource = transferInteraction,
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 17.dp),
@@ -127,16 +140,22 @@ fun SettingsScreen(
                     Text(
                         text = "›",
                         style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
+
+            val aboutInteraction = remember { MutableInteractionSource() }
             Surface(
                 onClick = onOpenAboutPrivacy,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pressScale(aboutInteraction)
+                    .specularRim(cornerRadius = 32.dp, topAlpha = 0.20f),
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 contentColor = MaterialTheme.colorScheme.onSurface,
+                interactionSource = aboutInteraction,
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 17.dp),
@@ -151,10 +170,38 @@ fun SettingsScreen(
                     Text(
                         text = "›",
                         style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun EditionBannerCard() {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .specularRim(cornerRadius = 32.dp, topAlpha = 0.24f),
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.edition_badge_android),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = stringResource(R.string.edition_badge_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -185,15 +232,18 @@ fun AboutPrivacyScreen(
             Text(
                 text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.Black,
+                fontWeight = FontWeight.ExtraBold,
             )
+            EditionBannerCard()
             Text(
                 text = stringResource(R.string.about_security_status),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Surface(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .specularRim(cornerRadius = 32.dp, topAlpha = 0.18f),
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surfaceContainer,
             ) {
@@ -226,11 +276,14 @@ private fun MinimalTopBar(
         },
         navigationIcon = {
             val backLabel = stringResource(R.string.action_back)
+            val interactionSource = remember { MutableInteractionSource() }
             Surface(
                 onClick = onBack,
                 modifier = Modifier
                     .padding(start = 8.dp)
                     .size(40.dp)
+                    .pressScale(interactionSource, pressedScale = 0.92f)
+                    .specularRim(cornerRadius = 20.dp, topAlpha = 0.18f)
                     .clearAndSetSemantics {
                         contentDescription = backLabel
                         onClick(label = backLabel) {
@@ -241,6 +294,7 @@ private fun MinimalTopBar(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurface,
+                interactionSource = interactionSource,
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(

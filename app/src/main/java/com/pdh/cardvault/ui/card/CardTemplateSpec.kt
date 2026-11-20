@@ -69,6 +69,14 @@ data class CardCoverSelection(
     val nicknameColorId: String,
 )
 
+@Immutable
+data class CardPresetSpec(
+    val id: String,
+    @param:StringRes val titleRes: Int,
+    @param:StringRes val subtitleRes: Int,
+    val template: CardTemplateSpec,
+)
+
 enum class CardNicknameArtwork {
     ModernRule,
     EditorialStack,
@@ -103,4 +111,16 @@ enum class CardMotif {
     MonochromeArcs,
     SparseGrid,
     ContinuousWave,
+    CrystalPrism,
+    SunburstRays,
+    MountainPeaks,
+    LotusMandala,
+    ConstellationMap,
+    AstrolabeCompass,
+    OceanScales,
+    HoneycombLattice,
+    ChevronStripes,
+    SilkGuilloche,
+    AuroraBeams,
+    MonolithSlabs,
 }

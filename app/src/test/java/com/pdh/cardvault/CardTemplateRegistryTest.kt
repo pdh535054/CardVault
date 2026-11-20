@@ -17,15 +17,19 @@ class CardTemplateRegistryTest {
         val patterns = CardTemplateRegistry.patterns
         val nicknameStyles = CardTemplateRegistry.nicknameStyles
         val nicknameColors = CardTemplateRegistry.nicknameColors
+        val presets = CardTemplateRegistry.presets
 
-        assertEquals(16, colors.size)
+        assertEquals(28, colors.size)
         assertEquals(colors.size, colors.map { it.id }.distinct().size)
-        assertEquals(18, patterns.size)
+        assertEquals(30, patterns.size)
         assertEquals(patterns.size, patterns.map { it.id }.distinct().size)
         assertEquals(9, nicknameStyles.size)
         assertEquals(nicknameStyles.size, nicknameStyles.map { it.id }.distinct().size)
-        assertEquals(10, nicknameColors.size)
+        assertEquals(14, nicknameColors.size)
         assertEquals(nicknameColors.size, nicknameColors.map { it.id }.distinct().size)
+        assertEquals(20, presets.size)
+        assertEquals(presets.size, presets.map { it.id }.distinct().size)
+        assertEquals(presets.size, presets.map { it.template.id }.distinct().size)
     }
 
     @Test
@@ -36,7 +40,7 @@ class CardTemplateRegistryTest {
             }
         }
 
-        assertEquals(288, combinations.size)
+        assertEquals(840, combinations.size)
         assertEquals(combinations.size, combinations.distinct().size)
         combinations.forEach { id ->
             val template = requireNotNull(CardTemplateRegistry.findById(id))
@@ -280,7 +284,7 @@ class CardTemplateRegistryTest {
             CardTemplateRegistry.DEFAULT_TEMPLATE_ID,
             CardTemplateRegistry.defaultTemplate.id,
         )
-        assertEquals(12, CardTemplateRegistry.templates.size)
+        assertEquals(20, CardTemplateRegistry.templates.size)
         assertTrue(CardTemplateRegistry.templates.all { it.id.startsWith("custom:v2:") })
     }
 }

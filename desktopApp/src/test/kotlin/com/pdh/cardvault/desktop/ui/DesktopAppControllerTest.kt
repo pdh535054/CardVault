@@ -1,6 +1,7 @@
 package com.pdh.cardvault.desktop.ui
 
 import com.pdh.cardvault.desktop.data.DesktopCardRepository
+import com.pdh.cardvault.desktop.data.InMemoryDesktopSyncHistory
 import com.pdh.cardvault.desktop.data.EncryptedDesktopVault
 import com.pdh.cardvault.desktop.data.LocalKeyProtector
 import com.pdh.cardvault.desktop.model.CardCoverStyle
@@ -126,6 +127,7 @@ class DesktopAppControllerTest {
                 EncryptedDesktopVault(Files.createTempDirectory("cardvault-conceal"), TestKeyProtector()),
             ),
             syncGateway = SyncCoreDesktopGateway(),
+            syncHistory = InMemoryDesktopSyncHistory(),
         )
         controller.startAdd()
         controller.updateDraft { it.copy(nickname = "尚未保存的卡片") }
@@ -188,6 +190,7 @@ class DesktopAppControllerTest {
             syncGateway = SyncCoreDesktopGateway(),
             clock = clock,
             authenticator = authenticator,
+            syncHistory = InMemoryDesktopSyncHistory(),
         )
 
         controller.startAddAddress()
@@ -246,6 +249,7 @@ class DesktopAppControllerTest {
         Files.write(transferFile, exported.bytes)
         exported.bytes.fill(0)
 
+        val history = InMemoryDesktopSyncHistory()
         val targetController = DesktopAppController(
             repository = DesktopCardRepository(
                 EncryptedDesktopVault(Files.createTempDirectory("cardvault-transfer-target"), TestKeyProtector()),
@@ -254,9 +258,13 @@ class DesktopAppControllerTest {
             syncGateway = SyncCoreDesktopGateway(clock),
             clock = clock,
             authenticator = RecordingAuthenticator(accepted = true),
+            syncHistory = history,
         )
+        assertEquals(null, targetController.lastSyncAtEpochMillis)
 
-        assertTrue(targetController.selectImportFile(transferFile))
+        targetController.onFileDropped(transferFile)
+        assertEquals(DesktopSection.Transfer, targetController.section)
+        assertEquals(transferFile.toAbsolutePath().normalize(), targetController.selectedImportPath)
         assertEquals(SyncFileKind.PAIRING, targetController.selectedImportKind)
         assertTrue(
             targetController.importSelected(exported.pairingCode),
@@ -266,6 +274,9 @@ class DesktopAppControllerTest {
         assertTrue(targetController.transferFeedback?.text?.startsWith("导入完成") == true)
         assertFalse(targetController.transferFeedback?.isError == true)
         assertEquals(null, targetController.selectedImportPath)
+        assertEquals(clock.millis(), history.lastSyncAtEpochMillis())
+        assertEquals(clock.millis(), targetController.lastSyncAtEpochMillis)
+        assertEquals(null, targetController.backupReminder)
 
         targetController.close()
         sourceRepository.close()
@@ -292,6 +303,7 @@ class DesktopAppControllerTest {
             syncGateway = SyncCoreDesktopGateway(clock),
             clock = clock,
             authenticator = authenticator,
+            syncHistory = InMemoryDesktopSyncHistory(),
         )
 
         assertTrue(targetController.selectImportFile(transferFile))
@@ -325,6 +337,7 @@ class DesktopAppControllerTest {
             syncGateway = SyncCoreDesktopGateway(clock),
             clock = clock,
             authenticator = RecordingAuthenticator(accepted = true),
+            syncHistory = InMemoryDesktopSyncHistory(),
         )
 
         assertTrue(targetController.selectImportFile(transferFile))
@@ -360,6 +373,7 @@ class DesktopAppControllerTest {
             syncGateway = SyncCoreDesktopGateway(clock),
             clock = clock,
             authenticator = authenticator,
+            syncHistory = InMemoryDesktopSyncHistory(),
         )
 
         assertTrue(targetController.selectImportFile(transferFile))
@@ -371,6 +385,33 @@ class DesktopAppControllerTest {
 
         targetController.close()
         sourceRepository.close()
+    }
+
+    @Test
+    fun `vault with data that never synced shows a snoozable backup reminder`() {
+        val controller = controllerWithCard(RecordingAuthenticator(accepted = true))
+        assertEquals(com.pdh.cardvault.wallet.BackupReminder.NeverSynced, controller.backupReminder)
+
+        controller.snoozeBackupReminder()
+
+        assertEquals(null, controller.backupReminder)
+        controller.close()
+    }
+
+    @Test
+    fun `dropping an unrelated file only shows a hint`() {
+        val controller = controllerWithCard(RecordingAuthenticator(accepted = true))
+        val unrelated = Files.createTempFile("cardvault-drop", ".txt")
+
+        controller.onFileDropped(unrelated)
+        assertEquals(DesktopSection.Home, controller.section)
+        assertEquals(null, controller.selectedImportPath)
+        assertTrue(controller.notice?.contains(".cvpair") == true)
+
+        controller.onFileDropped(null)
+        assertEquals(DesktopSection.Home, controller.section)
+        assertFalse(controller.transferDropActive)
+        controller.close()
     }
 
     private fun controllerWithCard(authenticator: SensitiveActionAuthenticator): DesktopAppController {
@@ -397,6 +438,7 @@ class DesktopAppControllerTest {
             syncGateway = SyncCoreDesktopGateway(),
             clock = clock,
             authenticator = authenticator,
+            syncHistory = InMemoryDesktopSyncHistory(),
         )
     }
 }

@@ -1,5 +1,9 @@
 package com.pdh.cardvault.ui.screen
 
+import android.app.Activity
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -46,7 +51,81 @@ import com.pdh.cardvault.R
 import com.pdh.cardvault.presentation.VaultPairingState
 import com.pdh.cardvault.presentation.VaultTransferMessageKind
 import com.pdh.cardvault.presentation.VaultTransferUiState
+import com.pdh.cardvault.wallet.BackupReminderPolicy
 import com.pdh.cardvault.sync.AndroidSyncFileExchange
+import com.pdh.cardvault.sync.extractPickerResultUri
+
+/**
+ * How a transfer file is picked. 1.6.5 launched only ACTION_OPEN_DOCUMENT with an
+ * unregistered custom MIME type and no error handling, which crashed or closed immediately on
+ * several OEM ROMs whose DocumentsUI is restricted. The system chooser lets the user pick the
+ * phone's own file manager instead, and every launch falls back to the other picker.
+ */
+internal enum class TransferPicker {
+    SystemChooser,
+    DocumentPicker,
+}
+
+internal fun pickerFallbackOrder(preferred: TransferPicker): List<TransferPicker> =
+    listOf(preferred) + TransferPicker.entries.filterNot { it == preferred }
+
+/** Tries each picker in order; returns false only if none of them could be started. */
+internal fun launchFirstAvailablePicker(
+    order: List<TransferPicker>,
+    launch: (TransferPicker) -> Unit,
+): Boolean {
+    for (picker in order) {
+        try {
+            launch(picker)
+            return true
+        } catch (_: RuntimeException) {
+            // ActivityNotFoundException / SecurityException from a missing or disabled picker.
+        }
+    }
+    return false
+}
+
+private fun importPickerIntent(picker: TransferPicker, chooserTitle: String): Intent =
+    when (picker) {
+        TransferPicker.SystemChooser -> Intent.createChooser(
+            Intent(Intent.ACTION_GET_CONTENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*"),
+            chooserTitle,
+        )
+        TransferPicker.DocumentPicker -> Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+    }
+
+private fun saveExportIntent(fileName: String): Intent =
+    Intent(Intent.ACTION_CREATE_DOCUMENT)
+        .addCategory(Intent.CATEGORY_OPENABLE)
+        .setType(AndroidSyncFileExchange.SHARE_MIME_TYPE)
+        .putExtra(Intent.EXTRA_TITLE, fileName)
+
+private fun readClipboardText(context: Context): String? = runCatching {
+    val clipboard = context.getSystemService(ClipboardManager::class.java)
+    clipboard?.primaryClip
+        ?.takeIf { it.itemCount > 0 }
+        ?.getItemAt(0)
+        ?.coerceToText(context)
+        ?.toString()
+}.getOrNull()
+
+/** "上次与其他设备同步：今天 / 3 天前 / 尚未同步过" — never shows file names or codes. */
+@Composable
+private fun lastSyncLabel(lastSyncAtEpochMillis: Long?): String {
+    if (lastSyncAtEpochMillis == null) {
+        return stringResource(R.string.vault_transfer_last_sync_never)
+    }
+    val days = BackupReminderPolicy.daysBetween(lastSyncAtEpochMillis, System.currentTimeMillis())
+    return if (days == 0) {
+        stringResource(R.string.vault_transfer_last_sync_today)
+    } else {
+        stringResource(R.string.vault_transfer_last_sync_days_ago, days)
+    }
+}
 
 @Composable
 fun VaultTransferScreen(
@@ -55,17 +134,45 @@ fun VaultTransferScreen(
     onPrepareExport: () -> Unit,
     onRotateSyncKey: () -> Unit,
     onSharePreparedExport: () -> Unit,
+    onSavePreparedExport: (String) -> Unit,
     onCopyPairingCode: () -> Unit,
     onImportUriSelected: (String) -> Unit,
+    onImportPickerUnavailable: () -> Unit,
+    onSavePickerUnavailable: () -> Unit,
     onPairingCodeChanged: (String) -> Unit,
+    onPastePairingCode: (String?) -> Unit,
     onConfirmPairingImport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     var showRotationConfirmation by remember { mutableStateOf(false) }
+    val importChooserTitle = stringResource(R.string.vault_transfer_import_chooser_title)
     val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-        onResult = { uri -> if (uri != null) onImportUriSelected(uri.toString()) },
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                extractPickerResultUri(result.data)?.let { uri ->
+                    onImportUriSelected(uri.toString())
+                }
+            }
+        },
     )
+    val saveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                extractPickerResultUri(result.data)?.let { uri ->
+                    onSavePreparedExport(uri.toString())
+                }
+            }
+        },
+    )
+    val launchImportPicker = { preferred: TransferPicker ->
+        val launched = launchFirstAvailablePicker(pickerFallbackOrder(preferred)) { picker ->
+            importLauncher.launch(importPickerIntent(picker, importChooserTitle))
+        }
+        if (!launched) onImportPickerUnavailable()
+    }
 
     Scaffold(
         modifier = modifier,
@@ -109,6 +216,11 @@ fun VaultTransferScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Text(
+                text = lastSyncLabel(state.lastSyncAtEpochMillis),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             TransferActionCard(
                 eyebrow = stringResource(R.string.vault_transfer_export_eyebrow),
@@ -132,6 +244,7 @@ fun VaultTransferScreen(
                         )
                     }
                 } else {
+                    val preparedFileName = state.preparedFileName
                     Button(
                         onClick = onSharePreparedExport,
                         enabled = !state.busy,
@@ -139,8 +252,22 @@ fun VaultTransferScreen(
                     ) {
                         Text(stringResource(R.string.vault_transfer_open_share))
                     }
+                    OutlinedButton(
+                        onClick = {
+                            val launched = launchFirstAvailablePicker(
+                                listOf(TransferPicker.DocumentPicker),
+                            ) {
+                                saveLauncher.launch(saveExportIntent(preparedFileName))
+                            }
+                            if (!launched) onSavePickerUnavailable()
+                        },
+                        enabled = !state.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.vault_transfer_save_to_device))
+                    }
                     Text(
-                        text = state.preparedFileName,
+                        text = preparedFileName,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -189,21 +316,24 @@ fun VaultTransferScreen(
                 description = stringResource(R.string.vault_transfer_import_description),
             ) {
                 OutlinedButton(
-                    onClick = {
-                        importLauncher.launch(
-                            arrayOf(
-                                AndroidSyncFileExchange.MIME_TYPE,
-                                "application/octet-stream",
-                                "application/zip",
-                                "*/*",
-                            ),
-                        )
-                    },
+                    onClick = { launchImportPicker(TransferPicker.SystemChooser) },
                     enabled = !state.busy,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.vault_transfer_choose_file))
                 }
+                TextButton(
+                    onClick = { launchImportPicker(TransferPicker.DocumentPicker) },
+                    enabled = !state.busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.vault_transfer_choose_file_document_picker))
+                }
+                Text(
+                    text = stringResource(R.string.vault_transfer_open_with_tip),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             if (state.importNeedsPairingCode) {
@@ -234,6 +364,13 @@ fun VaultTransferScreen(
                                 Text(stringResource(R.string.vault_transfer_pairing_code_placeholder))
                             },
                         )
+                        TextButton(
+                            onClick = { onPastePairingCode(readClipboardText(context)) },
+                            enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.vault_transfer_paste_pairing_code))
+                        }
                         Button(
                             onClick = onConfirmPairingImport,
                             enabled = !state.busy && state.pairingCodeInput.isNotBlank(),

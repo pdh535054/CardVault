@@ -18,6 +18,10 @@
     <string name="action_reveal_card_secrets">验证并显示卡片信息</string>
     <string name="action_hide_card_secrets">立即隐藏卡片信息</string>
     <string name="action_copy_revealed_card_number">复制卡号</string>
+    <string name="action_copy_short">复制</string>
+    <string name="action_copied_short">已复制</string>
+    <string name="action_copy_card_note">复制备注</string>
+    <string name="action_card_note_copied">备注已复制</string>
     <string name="action_edit_card">编辑</string>
     <string name="action_delete_card">删除</string>
     <string name="action_delete_permanently">永久删除</string>
@@ -51,6 +55,7 @@
     <string name="card_field_notes_optional">备注（可选）</string>
     <string name="card_template_heading">设计卡面</string>
     <string name="card_warning_luhn">卡号未通过 Luhn 校验，请确认输入；此提醒不会阻止保存。</string>
+    <string name="card_warning_possible_duplicate">卡包里已有同尾号的卡片「%1$s」，请确认不是重复添加；此提醒不会阻止保存。</string>
     <string name="card_error_nickname_required">请输入卡片昵称。</string>
     <string name="card_error_nickname_length">卡片昵称最多 50 个字符。</string>
     <string name="card_error_number_characters">卡号只能包含数字、空格或短横线。</string>
@@ -69,10 +74,10 @@
     <string name="card_stack_search_item_content_description">第 %1$d 张卡，共 %2$d 张；点按打开；敏感内容已隐藏</string>
     <string name="card_wallet_title">卡包</string>
     <string name="card_wallet_card_count">%1$d 张卡片</string>
-    <string name="card_search_last_four">搜索卡号后四位</string>
+    <string name="card_search_hint">搜索卡片名称、发卡行或尾号</string>
     <string name="card_search_clear">清除</string>
     <string name="card_search_all_folders">正在搜索全部文件夹</string>
-    <string name="card_search_no_results">未找到末四位匹配的卡片</string>
+    <string name="card_search_no_results">没有找到匹配的卡片</string>
 
     <string name="vault_home_title">选择保险库</string>
     <string name="vault_home_subtitle">银行卡与地址分别整理，统一加密保存在本机</string>
@@ -80,9 +85,26 @@
     <string name="vault_home_cards_subtitle">进入卡包、添加银行卡或查看卡片信息</string>
     <string name="vault_home_addresses_title">地址</string>
     <string name="vault_home_addresses_subtitle">保存常用地址并快速复制完整信息</string>
+    <string name="vault_home_cards_unit">张卡片</string>
+    <string name="vault_home_addresses_unit">个地址</string>
+    <string name="home_greeting_morning">早上好</string>
+    <string name="home_greeting_noon">中午好</string>
+    <string name="home_greeting_afternoon">下午好</string>
+    <string name="home_greeting_evening">晚上好</string>
+    <string name="home_greeting_night">夜深了，注意休息</string>
+    <string name="home_offline_badge">本机离线加密 · Gemini</string>
+    <string name="edition_badge_android" translatable="false">CardVault 1.9.1 · Gemini 4 Carbon Edition</string>
+    <string name="edition_badge_subtitle">120Hz 零冗余重绘流光引擎 · 端到端离线保险库</string>
+    <string name="backup_reminder_never_title">你的卡包还没有备份过</string>
+    <string name="backup_reminder_overdue_title">已经 %1$d 天没有备份卡包了</string>
+    <string name="backup_reminder_detail">CardVault 只把资料保存在这台手机上。换机、丢失或误卸载时，只有导出到电脑或其他设备的加密备份能找回数据。</string>
+    <string name="backup_reminder_action">去备份</string>
+    <string name="backup_reminder_snooze">%1$d 天后再提醒</string>
 
     <string name="address_wallet_title">地址簿</string>
     <string name="address_wallet_count">%1$d 个地址</string>
+    <string name="address_search_hint">搜索地址名称</string>
+    <string name="address_search_no_results">没有找到匹配的地址</string>
     <string name="address_empty_heading">暂无地址</string>
     <string name="address_empty_detail">添加常用地址后，它们会以卡片形式显示在这里。</string>
     <string name="address_add_title">添加地址</string>
@@ -165,6 +187,7 @@
     <string name="vault_transfer_encrypting">正在加密…</string>
     <string name="vault_transfer_prepare_export">生成传输文件</string>
     <string name="vault_transfer_open_share">打开系统分享</string>
+    <string name="vault_transfer_save_to_device">另存到手机</string>
     <string name="vault_transfer_pairing_code_title">一次性配对码</string>
     <string name="vault_transfer_copy_pairing_code">复制配对码</string>
     <string name="vault_transfer_pairing_code_instruction">在另一台设备导入配对文件时输入；不要与文件一起转发。</string>
@@ -172,8 +195,15 @@
     <string name="vault_transfer_import_title">从加密文件同步</string>
     <string name="vault_transfer_import_description">选择微信、QQ 下载或本地保存的 .cvpair / .cvsync 文件</string>
     <string name="vault_transfer_choose_file">选择文件</string>
+    <string name="vault_transfer_choose_file_document_picker">改用系统文档选择器</string>
+    <string name="vault_transfer_import_chooser_title">选择 CardVault 加密文件</string>
+    <string name="vault_transfer_open_with_tip">也可以不用选择器：在微信、QQ 或文件管理中点开 .cvpair / .cvsync 文件，选择「用其他应用打开」→ CardVault，即可直接导入。</string>
     <string name="vault_transfer_pairing_code_input_title">输入配对码</string>
     <string name="vault_transfer_pairing_code_placeholder" translatable="false">CVP1-…</string>
+    <string name="vault_transfer_paste_pairing_code">粘贴配对码</string>
+    <string name="vault_transfer_last_sync_never">尚未与其他设备同步或导出过加密备份</string>
+    <string name="vault_transfer_last_sync_today">上次与其他设备同步：今天</string>
+    <string name="vault_transfer_last_sync_days_ago">上次与其他设备同步：%1$d 天前</string>
     <string name="vault_transfer_verify_import">验证并导入</string>
     <string name="vault_transfer_secure_processing">正在安全处理</string>
     <string name="vault_transfer_encryption_note">文件经过 AES-256-GCM 加密。CardVault 不联网，微信、QQ 或其他应用只负责传送密文。</string>
@@ -195,8 +225,11 @@
     <string name="card_face_hidden_expiry" translatable="false">••/••</string>
     <string name="card_style_custom">原创卡面</string>
     <string name="card_style_nickname_preview">卡片昵称</string>
-    <string name="card_style_color_heading">选择颜色</string>
-    <string name="card_style_pattern_heading">选择花纹</string>
+    <string name="card_style_presets_heading">精选预设风格</string>
+    <string name="card_style_presets_subtitle">一键套用整套设计，也可在下方自由组合微调</string>
+    <string name="card_style_customizer_heading">自由定制卡面</string>
+    <string name="card_style_color_heading">选择颜色（28 款预设 + 自由调色）</string>
+    <string name="card_style_pattern_heading">选择花纹与图案（30 款）</string>
     <string name="card_style_name_font_heading">名称设计</string>
     <string name="card_style_name_color_heading">名称颜色</string>
     <string name="card_color_custom">自定义</string>
@@ -223,6 +256,18 @@
     <string name="card_color_coral">珊瑚橙</string>
     <string name="card_color_pearl">珍珠白</string>
     <string name="card_color_magenta">洋红</string>
+    <string name="card_color_titanium">钛金灰</string>
+    <string name="card_color_rosegold">玫瑰金</string>
+    <string name="card_color_bronze">古铜金</string>
+    <string name="card_color_emerald">祖母绿</string>
+    <string name="card_color_sapphire">皇家蓝</string>
+    <string name="card_color_crimson">绯绒红</string>
+    <string name="card_color_amber">琥珀金</string>
+    <string name="card_color_indigo">星夜靛</string>
+    <string name="card_color_cyber">赛博青</string>
+    <string name="card_color_sakura">樱雾粉</string>
+    <string name="card_color_matcha">抹茶绿</string>
+    <string name="card_color_sandstone">暖砂岩</string>
 
     <string name="card_pattern_plain">纯净</string>
     <string name="card_pattern_contours">等高线</string>
@@ -242,6 +287,18 @@
     <string name="card_pattern_tiles">菱格</string>
     <string name="card_pattern_arcs">弧线</string>
     <string name="card_pattern_continuous">连续波</string>
+    <string name="card_pattern_prism">棱镜折光</string>
+    <string name="card_pattern_sunburst">曜光射线</string>
+    <string name="card_pattern_mountains">远山层峦</string>
+    <string name="card_pattern_lotus">几何莲华</string>
+    <string name="card_pattern_constellation">星图连线</string>
+    <string name="card_pattern_compass">星盘罗盘</string>
+    <string name="card_pattern_scales">青海波纹</string>
+    <string name="card_pattern_honeycomb">蜂巢晶格</string>
+    <string name="card_pattern_chevrons">流矢斜纹</string>
+    <string name="card_pattern_silk">丝绸流韵</string>
+    <string name="card_pattern_beams">极光光幕</string>
+    <string name="card_pattern_monolith">黑曜石碑</string>
 
     <string name="card_name_style_modern">现代无衬线</string>
     <string name="card_name_style_editorial">典雅衬线</string>
@@ -263,6 +320,51 @@
     <string name="card_name_color_rose">柔粉</string>
     <string name="card_name_color_violet">淡紫</string>
     <string name="card_name_color_coral">珊瑚</string>
+    <string name="card_name_color_amber">琥珀橙</string>
+    <string name="card_name_color_cyan">电光青</string>
+    <string name="card_name_color_crimson">绯红</string>
+    <string name="card_name_color_platinum">铂灰</string>
+
+    <string name="card_preset_obsidian_prism_title">黑金棱镜</string>
+    <string name="card_preset_obsidian_prism_sub">尊享金属</string>
+    <string name="card_preset_sapphire_constellation_title">星际深海</string>
+    <string name="card_preset_sapphire_constellation_sub">浩瀚星图</string>
+    <string name="card_preset_forest_mountains_title">远山松烟</string>
+    <string name="card_preset_forest_mountains_sub">东方意境</string>
+    <string name="card_preset_emerald_scales_title">翡翠青海</string>
+    <string name="card_preset_emerald_scales_sub">传统纹样</string>
+    <string name="card_preset_cyber_circuit_title">赛博脉冲</string>
+    <string name="card_preset_cyber_circuit_sub">霓虹科技</string>
+    <string name="card_preset_titanium_frame_title">钛金极简</string>
+    <string name="card_preset_titanium_frame_sub">拉丝金属</string>
+    <string name="card_preset_champagne_lotus_title">香槟莲华</string>
+    <string name="card_preset_champagne_lotus_sub">浮雕奢雅</string>
+    <string name="card_preset_indigo_compass_title">星夜罗盘</string>
+    <string name="card_preset_indigo_compass_sub">秘境星盘</string>
+    <string name="card_preset_aurora_beams_title">极光光幕</string>
+    <string name="card_preset_aurora_beams_sub">幻彩流光</string>
+    <string name="card_preset_sakura_silk_title">樱雾丝绸</string>
+    <string name="card_preset_sakura_silk_sub">柔雾轻奢</string>
+    <string name="card_preset_crimson_sunburst_title">绯绒曜光</string>
+    <string name="card_preset_crimson_sunburst_sub">炽烈锋芒</string>
+    <string name="card_preset_rosegold_ribbons_title">玫瑰流韵</string>
+    <string name="card_preset_rosegold_ribbons_sub">丝缎金属</string>
+    <string name="card_preset_carbon_monolith_title">黑曜石碑</string>
+    <string name="card_preset_carbon_monolith_sub">建筑几何</string>
+    <string name="card_preset_amber_mountains_title">琥珀层峦</string>
+    <string name="card_preset_amber_mountains_sub">暮色山河</string>
+    <string name="card_preset_glacier_honeycomb_title">冰川晶格</string>
+    <string name="card_preset_glacier_honeycomb_sub">纯净冷冽</string>
+    <string name="card_preset_violet_orbits_title">紫晶星轨</string>
+    <string name="card_preset_violet_orbits_sub">梦幻暗夜</string>
+    <string name="card_preset_bronze_arches_title">古铜拱门</string>
+    <string name="card_preset_bronze_arches_sub">典藏金库</string>
+    <string name="card_preset_matcha_waves_title">抹茶微澜</string>
+    <string name="card_preset_matcha_waves_sub">自然清新</string>
+    <string name="card_preset_pearl_tiles_title">珍珠菱格</string>
+    <string name="card_preset_pearl_tiles_sub">温润白瓷</string>
+    <string name="card_preset_cobalt_chevrons_title">钴蓝流矢</string>
+    <string name="card_preset_cobalt_chevrons_sub">动感竞速</string>
 
     <string name="card_network_visa" translatable="false">VISA</string>
     <string name="card_network_unionpay_short">银联</string>

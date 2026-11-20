@@ -1,10 +1,12 @@
 package com.pdh.cardvault.desktop.model
 
+import androidx.compose.runtime.Immutable
 import java.time.Clock
 import java.util.UUID
 
 enum class DesktopFolderKind { CARDS, ADDRESSES }
 
+@Immutable
 data class DesktopFolder(
     val id: String,
     val name: String,

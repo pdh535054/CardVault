@@ -5,7 +5,9 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.pdh.cardvault.desktop.data.DesktopCardRepository
+import com.pdh.cardvault.desktop.data.DesktopSyncHistory
 import com.pdh.cardvault.desktop.data.LocalKeyUnavailableException
+import com.pdh.cardvault.desktop.data.PreferencesDesktopSyncHistory
 import com.pdh.cardvault.desktop.model.CardCoverStyle
 import com.pdh.cardvault.desktop.model.AndroidTemplateStyleCodec
 import com.pdh.cardvault.desktop.model.DesktopCard
@@ -19,7 +21,10 @@ import com.pdh.cardvault.desktop.security.WindowsHelloAuthenticator
 import com.pdh.cardvault.desktop.sync.DesktopSyncGateway
 import com.pdh.cardvault.desktop.sync.DesktopTransferFiles
 import com.pdh.cardvault.sync.CardVaultSyncFiles
+import com.pdh.cardvault.sync.PairingCode
 import com.pdh.cardvault.sync.SyncFileKind
+import com.pdh.cardvault.wallet.BackupReminder
+import com.pdh.cardvault.wallet.BackupReminderPolicy
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.awt.Toolkit
@@ -33,6 +38,12 @@ import java.util.TimerTask
 import java.util.prefs.Preferences
 
 enum class DesktopSection { Home, Wallet, Editor, Addresses, AddressEditor, Transfer, Settings }
+
+/** CardVault encrypted transfer files, matched by extension (case-insensitive). */
+internal fun isTransferFileName(fileName: String?): Boolean {
+    val name = fileName?.lowercase() ?: return false
+    return name.endsWith(".cvpair") || name.endsWith(".cvsync")
+}
 
 data class CardDraft(
     val id: String? = null,
@@ -96,6 +107,7 @@ class DesktopAppController(
     val syncGateway: DesktopSyncGateway,
     private val clock: Clock = Clock.systemUTC(),
     private val authenticator: SensitiveActionAuthenticator = WindowsHelloAuthenticator(),
+    private val syncHistory: DesktopSyncHistory = PreferencesDesktopSyncHistory(),
 ) : AutoCloseable {
     var cards by mutableStateOf(repository.cards())
         private set
@@ -154,6 +166,22 @@ class DesktopAppController(
         private set
     var transferFeedback by mutableStateOf<TransferFeedback?>(null)
         private set
+    var lastSyncAtEpochMillis by mutableStateOf(runCatching { syncHistory.lastSyncAtEpochMillis() }.getOrNull())
+        private set
+    private var backupReminderSnoozedUntil by mutableStateOf(
+        runCatching { syncHistory.reminderSnoozedUntilEpochMillis() }.getOrNull(),
+    )
+
+    /** True while a file is being dragged over the window (drives the drop overlay). */
+    var transferDropActive by mutableStateOf(false)
+
+    val backupReminder: BackupReminder?
+        get() = BackupReminderPolicy.evaluate(
+            hasVaultData = cards.isNotEmpty() || addresses.isNotEmpty(),
+            lastSyncAtEpochMillis = lastSyncAtEpochMillis,
+            snoozedUntilEpochMillis = backupReminderSnoozedUntil,
+            nowEpochMillis = clock.millis(),
+        )
 
     private val authenticationMutex = Mutex()
     private var revealedCardId: String? = null
@@ -528,7 +556,8 @@ class DesktopAppController(
         val value = runCatching {
             Toolkit.getDefaultToolkit().systemClipboard.getData(DataFlavor.stringFlavor) as? String
         }.getOrNull()
-        val normalized = value?.let(::normalizePairingCodeInput).orEmpty()
+        val normalized = PairingCode.findIn(value)
+            ?: value?.let(::normalizePairingCodeInput).orEmpty()
         return normalized.takeIf(String::isNotBlank).also { code ->
             if (code == null) {
                 setTransferFeedback("剪贴板中没有可用的配对码", isError = true)
@@ -542,6 +571,47 @@ class DesktopAppController(
         val code = pairingCode ?: return
         copySensitiveText(code, "配对码已复制")
         setTransferFeedback("配对码已复制，剪贴板将在 60 秒后清除")
+    }
+
+    /**
+     * A file dropped onto the window. Encrypted transfer files jump straight to the import
+     * screen and are pre-selected; anything else is rejected with a short hint.
+     */
+    fun onFileDropped(path: Path?) {
+        transferDropActive = false
+        if (path == null || !isTransferFileName(path.fileName?.toString())) {
+            notice = "请拖入 .cvpair 或 .cvsync 加密文件"
+            return
+        }
+        if (transferBusy) {
+            notice = "正在处理上一个文件，请稍候"
+            return
+        }
+        section = DesktopSection.Transfer
+        selectImportFile(path)
+    }
+
+    fun snoozeBackupReminder() {
+        val until = BackupReminderPolicy.snoozeUntil(clock.millis())
+        runCatching { syncHistory.snoozeReminder(until) }
+        backupReminderSnoozedUntil = until
+    }
+
+    private fun recordSync() {
+        val now = clock.millis()
+        runCatching { syncHistory.recordSync(now) }
+        lastSyncAtEpochMillis = now
+        backupReminderSnoozedUntil = null
+    }
+
+    /** Notes are user-written plain text: copied as-is and never auto-cleared. */
+    fun copyCardNote(cardId: String) {
+        val notes = cards.firstOrNull { it.id == cardId }?.notes.orEmpty()
+        if (notes.isBlank()) return
+        val copied = runCatching {
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(notes), null)
+        }.isSuccess
+        notice = if (copied) "备注已复制" else "未能复制备注"
     }
 
     suspend fun export(newPairing: Boolean): Boolean {
@@ -561,6 +631,7 @@ class DesktopAppController(
                 val path = DesktopTransferFiles.writeExport(directory, exported)
                 pairingCode = exported.pairingCode
                 notice = "已安全导出到 ${path.fileName}"
+                recordSync()
             } finally {
                 exported.bytes.fill(0)
             }
@@ -590,6 +661,7 @@ class DesktopAppController(
                 val path = DesktopTransferFiles.writeExport(directory, exported)
                 pairingCode = exported.pairingCode
                 notice = "旧同步关系已撤销；新配对文件已保存到 ${path.fileName}"
+                recordSync()
             } finally {
                 exported.bytes.fill(0)
             }
@@ -648,6 +720,7 @@ class DesktopAppController(
             selectedAddressId = addresses.firstOrNull()?.id
             notice = result.message
             setTransferFeedback(result.message)
+            recordSync()
             true
         } catch (error: Throwable) {
             setTransferFeedback(safeTransferError(error, stage), isError = true)

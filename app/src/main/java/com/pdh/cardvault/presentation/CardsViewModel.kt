@@ -1,6 +1,7 @@
 package com.pdh.cardvault.presentation
 
 import android.os.SystemClock
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -46,6 +47,7 @@ enum class CardFormField {
     Notes,
 }
 
+@Immutable
 data class CardFormUiState(
     val nickname: String,
     val issuerName: String,
@@ -77,6 +79,7 @@ data class CardFormUiState(
     override fun toString(): String = "CardFormUiState(sensitiveFields=redacted)"
 }
 
+@Immutable
 data class CardListItemUiModel(
     val id: UUID,
     val nickname: String,
@@ -89,6 +92,7 @@ data class CardListItemUiModel(
     override fun toString(): String = "CardListItemUiModel(sensitiveFields=redacted)"
 }
 
+@Immutable
 data class VaultFolderUiModel(
     val id: UUID,
     val name: String,
@@ -107,6 +111,7 @@ enum class CvvSaveStatusUi {
     override fun toString(): String = "CvvSaveStatusUi(value=redacted)"
 }
 
+@Immutable
 data class CardDetailUiModel(
     val nickname: String,
     val issuerName: String,
@@ -196,6 +201,7 @@ sealed interface CardNavigationEvent {
     data object DeleteCompleted : CardNavigationEvent
 }
 
+@Immutable
 data class CardsUiState(
     val vaultContentState: VaultContentState,
     val cards: List<CardListItemUiModel>,
@@ -203,7 +209,7 @@ data class CardsUiState(
     val folderOrder: List<UUID?> = listOf(null),
     val walletOrder: List<String> = emptyList(),
     val selectedFolderId: UUID? = null,
-    val lastFourSearchQuery: String = "",
+    val cardSearchQuery: String = "",
     val form: CardFormUiState,
     val isSorting: Boolean,
     val sortingInProgress: Boolean,
@@ -524,7 +530,7 @@ class CardsViewModel internal constructor(
                         cards = cards,
                         folders = folders,
                         selectedFolderId = form.folderId,
-                        lastFourSearchQuery = "",
+                        cardSearchQuery = "",
                         form = emptyForm(),
                         isSorting = false,
                         operationMessage = CardOperationMessage.None,
@@ -1005,15 +1011,19 @@ class CardsViewModel internal constructor(
             if (current.vaultContentState != VaultContentState.Ready ||
                 (folderId != null && current.folders.none { it.id == folderId })
             ) current
-            else current.copy(selectedFolderId = folderId, lastFourSearchQuery = "")
+            else current.copy(selectedFolderId = folderId, cardSearchQuery = "")
         }
     }
 
-    fun updateLastFourSearchQuery(value: String) {
-        val digits = value.filter { it in '0'..'9' }.take(4)
+    /**
+     * Free-text wallet search: card name, issuer or last-four digits (see
+     * cardMatchesSearch). Whitespace is collapsed and the length is capped.
+     */
+    fun updateCardSearchQuery(value: String) {
+        val normalized = normalizeCardSearchQuery(value)
         _uiState.update { current ->
             if (current.vaultContentState == VaultContentState.Ready) {
-                current.copy(lastFourSearchQuery = digits)
+                current.copy(cardSearchQuery = normalized)
             } else current
         }
     }

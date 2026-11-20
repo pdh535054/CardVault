@@ -84,6 +84,7 @@ fun AddCardScreen(
     onSubmit: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    duplicateCardNames: List<String> = emptyList(),
 ) = BankCardFormScreen(
     title = if (form.isTemplateCopy) "以此卡新建" else stringResource(R.string.add_card_title),
     saveButtonLabel = stringResource(R.string.action_save_card),
@@ -95,6 +96,7 @@ fun AddCardScreen(
     onSubmit = onSubmit,
     onBack = onBack,
     folderPicker = { CardDestinationPicker(folders, form.folderId, !form.submitting, onFolderSelected) },
+    duplicateCardNames = duplicateCardNames,
     modifier = modifier,
 )
 
@@ -109,6 +111,7 @@ fun EditCardScreen(
     onSubmit: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    duplicateCardNames: List<String> = emptyList(),
 ) = BankCardFormScreen(
     title = stringResource(R.string.edit_card_title),
     saveButtonLabel = stringResource(R.string.action_save_changes),
@@ -119,6 +122,7 @@ fun EditCardScreen(
     onTemplateSelected = onTemplateSelected,
     onSubmit = onSubmit,
     onBack = onBack,
+    duplicateCardNames = duplicateCardNames,
     modifier = modifier,
 )
 
@@ -136,6 +140,7 @@ private fun BankCardFormScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     folderPicker: (@Composable () -> Unit)? = null,
+    duplicateCardNames: List<String> = emptyList(),
 ) {
     BackHandler {
         if (!form.submitting) onBack()
@@ -211,8 +216,11 @@ private fun BankCardFormScreen(
         null
     }
     val cvvFocusRequester = remember { FocusRequester() }
+    val copyCardNote = rememberCardNoteCopier()
 
-    ClipboardBlocked {
+    // Only the payment-credential fields (card number, expiry and CVV) are wrapped in
+    // ClipboardBlocked below. Nickname and notes intentionally keep the platform clipboard so
+    // that the system "select all -> copy" toolbar works for user-authored text.
         Scaffold(
             modifier = modifier,
             containerColor = MaterialTheme.colorScheme.background,
@@ -324,25 +332,27 @@ private fun BankCardFormScreen(
                     supportingText = nicknameError.asSupportingText(),
                     shape = RoundedCornerShape(16.dp),
                 )
-                OutlinedTextField(
-                    value = form.cardNumber,
-                    onValueChange = { value -> onFieldChanged(CardFormField.CardNumber, value) },
-                    label = { Text(stringResource(R.string.card_field_number)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .redactValueFromSemantics(
-                            stringResource(R.string.card_field_number),
+                ClipboardBlocked {
+                    OutlinedTextField(
+                        value = form.cardNumber,
+                        onValueChange = { value -> onFieldChanged(CardFormField.CardNumber, value) },
+                        label = { Text(stringResource(R.string.card_field_number)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .redactValueFromSemantics(
+                                stringResource(R.string.card_field_number),
+                            ),
+                        singleLine = true,
+                        isError = cardNumberError != null,
+                        supportingText = cardNumberError.asSupportingText(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Next,
                         ),
-                    singleLine = true,
-                    isError = cardNumberError != null,
-                    supportingText = cardNumberError.asSupportingText(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Number,
-                        imeAction = ImeAction.Next,
-                    ),
-                    visualTransformation = GroupedCardNumberVisualTransformation,
-                    shape = RoundedCornerShape(16.dp),
-                )
+                        visualTransformation = GroupedCardNumberVisualTransformation,
+                        shape = RoundedCornerShape(16.dp),
+                    )
+                }
                 if (form.showLuhnWarning) {
                     Text(
                         text = stringResource(R.string.card_warning_luhn),
@@ -350,8 +360,19 @@ private fun BankCardFormScreen(
                         color = MaterialTheme.colorScheme.tertiary,
                     )
                 }
+                if (duplicateCardNames.isNotEmpty()) {
+                    Text(
+                        text = stringResource(
+                            R.string.card_warning_possible_duplicate,
+                            duplicateCardNames.take(2).joinToString("」「"),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
 
                 val expiryError = expiryMonthError ?: expiryYearError
+                ClipboardBlocked {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -410,6 +431,7 @@ private fun BankCardFormScreen(
                         shape = RoundedCornerShape(16.dp),
                     )
                 }
+                }
                 OutlinedTextField(
                     value = form.notes,
                     onValueChange = { value -> onFieldChanged(CardFormField.Notes, value) },
@@ -423,6 +445,23 @@ private fun BankCardFormScreen(
                     maxLines = 4,
                     isError = notesError != null,
                     supportingText = notesError.asSupportingText(),
+                    trailingIcon = if (canCopyCardNote(form.notes)) {
+                        {
+                            TextButton(onClick = { copyCardNote.copy(form.notes) }) {
+                                Text(
+                                    stringResource(
+                                        if (copyCardNote.recentlyCopied) {
+                                            R.string.action_copied_short
+                                        } else {
+                                            R.string.action_copy_short
+                                        },
+                                    ),
+                                )
+                            }
+                        }
+                    } else {
+                        null
+                    },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     shape = RoundedCornerShape(16.dp),
                 )
@@ -459,7 +498,6 @@ private fun BankCardFormScreen(
                 }
             }
         }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

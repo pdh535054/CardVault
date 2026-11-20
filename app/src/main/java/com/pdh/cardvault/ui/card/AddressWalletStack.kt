@@ -2,11 +2,9 @@ package com.pdh.cardvault.ui.card
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -45,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.pdh.cardvault.R
 import com.pdh.cardvault.presentation.AddressListItemUiModel
+import com.pdh.cardvault.ui.theme.CardVaultMotion
+import com.pdh.cardvault.ui.theme.pressScale
 import java.util.UUID
 
 /** Address counterpart of [CardWalletStack], including the same long-press drag interaction. */
@@ -100,35 +100,18 @@ fun AddressWalletStack(
             draftAddresses.forEachIndexed { index, address ->
                 key(address.id) {
                     val isDragging = draggingAddressId == address.id
-                    var hasEntered by remember(address.id) { mutableStateOf(false) }
                     var cardOriginInRoot by remember(address.id) { mutableStateOf(Offset.Zero) }
-                    LaunchedEffect(address.id) { hasEntered = true }
                     val targetOffset = walletCardOffset(index, ADDRESS_CARD_PEEK.value).dp
                     val animatedOffset by animateDpAsState(
                         targetValue = targetOffset,
-                        animationSpec = spring(dampingRatio = 0.82f, stiffness = 430f),
+                        animationSpec = CardVaultMotion.snappySpring(),
                         label = "address-card-offset",
                     )
                     val interactionSource = remember(address.id) { MutableInteractionSource() }
-                    val isPressed by interactionSource.collectIsPressedAsState()
-                    val scale by animateFloatAsState(
-                        targetValue = when {
-                            isDragging -> 1.018f
-                            isPressed -> 0.982f
-                            else -> 1f
-                        },
-                        animationSpec = spring(dampingRatio = 0.76f, stiffness = 560f),
+                    val dragScale by animateFloatAsState(
+                        targetValue = if (isDragging) 1.024f else 1f,
+                        animationSpec = CardVaultMotion.tactileSpring(),
                         label = "address-card-scale",
-                    )
-                    val entryProgress by animateFloatAsState(
-                        targetValue = if (hasEntered) 1f else 0f,
-                        animationSpec = spring(dampingRatio = 0.88f, stiffness = 420f),
-                        label = "address-card-entry",
-                    )
-                    val dragRotation by animateFloatAsState(
-                        targetValue = if (isDragging) -0.65f else 0f,
-                        animationSpec = spring(dampingRatio = 0.8f, stiffness = 520f),
-                        label = "address-card-drag-rotation",
                     )
                     val dragCompensationPx = if (isDragging) {
                         dragDistancePx - (dragTargetIndex - dragStartIndex) * peekPx
@@ -171,6 +154,7 @@ fun AddressWalletStack(
                             .zIndex(
                                 if (isDragging) draftAddresses.size + 1f else index.toFloat(),
                             )
+                            .pressScale(interactionSource, pressedScale = 0.984f)
                             .graphicsLayer {
                                 translationX = if (isDragging) dragDistanceXPx else 0f
                                 translationY = if (isDragging) {
@@ -178,12 +162,10 @@ fun AddressWalletStack(
                                 } else {
                                     animatedOffset.toPx()
                                 }
-                                val entryScale = 0.965f + (0.035f * entryProgress)
-                                scaleX = scale * entryScale
-                                scaleY = scale * entryScale
-                                alpha = entryProgress
-                                rotationZ = dragRotation
-                                shadowElevation = if (isDragging) 26.dp.toPx() else 8.dp.toPx()
+                                scaleX = dragScale
+                                scaleY = dragScale
+                                rotationZ = if (isDragging) -0.55f else 0f
+                                shadowElevation = 0f
                                 shape = cardShape
                                 clip = false
                             }

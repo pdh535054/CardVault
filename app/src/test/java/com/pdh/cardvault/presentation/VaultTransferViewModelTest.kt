@@ -1,6 +1,8 @@
 package com.pdh.cardvault.presentation
 
 import android.content.Intent
+import com.pdh.cardvault.data.BackupHistoryStore
+import com.pdh.cardvault.data.InMemoryBackupHistoryStore
 import com.pdh.cardvault.security.auth.AuthenticationAction
 import com.pdh.cardvault.sync.CardVaultSyncFiles
 import com.pdh.cardvault.sync.PairingFilePayload
@@ -240,15 +242,36 @@ class VaultTransferViewModelTest {
     }
 
     @Test
-    fun backgroundingWithoutSystemAuthenticationWipesPendingImportAndCode() {
+    fun backgroundingKeepsSelectedPairingFileButWipesTypedPairingCode() {
+        // Users often switch to WeChat to copy the pairing code after opening the .cvpair.
+        // The encrypted file stays selected; the typed code (the actual secret) is wiped.
         val fixture = fixture(readBytes = encodedPairingFile())
         fixture.viewModel.onImportUriSelected(TEST_URI)
         fixture.viewModel.updatePairingCode("CVP1-ABCD-2345")
 
         fixture.viewModel.onAppBackgrounded(preservePendingAuthentication = false)
 
-        assertFalse(fixture.viewModel.uiState.value.importNeedsPairingCode)
+        assertTrue(fixture.viewModel.uiState.value.importNeedsPairingCode)
         assertTrue(fixture.viewModel.uiState.value.pairingCodeInput.isEmpty())
+        assertFalse(fixture.files.readBytes.all { it == 0.toByte() })
+
+        fixture.viewModel.updatePairingCode("CVP1-ABCD-2345")
+        fixture.viewModel.confirmPairingImport()
+        authorize(fixture.viewModel, AuthenticationAction.ImportVault)
+        assertEquals(1, fixture.operations.pairingImportCount)
+        assertTrue(fixture.files.readBytes.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun backgroundingWipesPendingSyncFileThatWasWaitingForAuthentication() {
+        val fixture = fixture(readBytes = encodedSyncFile())
+        fixture.viewModel.onImportUriSelected(TEST_URI)
+        assertEquals(AuthenticationAction.ImportVault, fixture.viewModel.pendingAuthenticationAction())
+
+        fixture.viewModel.onAppBackgrounded(preservePendingAuthentication = false)
+
+        assertNull(fixture.viewModel.pendingAuthenticationAction())
+        assertFalse(fixture.viewModel.uiState.value.importNeedsPairingCode)
         assertTrue(fixture.files.readBytes.all { it == 0.toByte() })
     }
 
@@ -293,6 +316,154 @@ class VaultTransferViewModelTest {
         assertEquals("CardVault-pair-1.cvpair", fixture.viewModel.uiState.value.preparedFileName)
     }
 
+    @Test
+    fun preparedExportCanBeSavedToDeviceWithoutDroppingPairingCode() {
+        val fixture = fixture(paired = false)
+        fixture.viewModel.requestExport()
+        authorize(fixture.viewModel, AuthenticationAction.ExportVault)
+
+        fixture.viewModel.savePreparedExport("content://downloads/document/42")
+
+        assertEquals("content://downloads/document/42", fixture.files.savedDestination)
+        assertEquals(FakeOperations.PAIRING_CODE, fixture.viewModel.uiState.value.pairingCode)
+        assertEquals("CardVault-pair-1.cvpair", fixture.viewModel.uiState.value.preparedFileName)
+        assertEquals(VaultTransferMessageKind.Success, fixture.viewModel.uiState.value.message?.kind)
+        assertFalse(
+            requireNotNull(fixture.viewModel.uiState.value.message?.text)
+                .contains(FakeOperations.PAIRING_CODE),
+        )
+    }
+
+    @Test
+    fun saveFailureUsesSafeFeedbackAndKeepsPreparedFile() {
+        val fixture = fixture(paired = false)
+        fixture.viewModel.requestExport()
+        authorize(fixture.viewModel, AuthenticationAction.ExportVault)
+        fixture.files.saveFailure = IOException("Synthetic write failure")
+
+        fixture.viewModel.savePreparedExport("content://downloads/document/42")
+
+        assertEquals("无法读取或写入加密同步文件", fixture.viewModel.uiState.value.message?.text)
+        assertFalse(fixture.viewModel.uiState.value.busy)
+        assertEquals("CardVault-pair-1.cvpair", fixture.viewModel.uiState.value.preparedFileName)
+    }
+
+    @Test
+    fun unreadableFileExplainsOpenWithAlternative() {
+        val fixture = fixture()
+        fixture.files.readFailure = SecurityException("Permission denial")
+
+        fixture.viewModel.onImportUriSelected(TEST_URI)
+
+        val message = requireNotNull(fixture.viewModel.uiState.value.message)
+        assertEquals(VaultTransferMessageKind.Error, message.kind)
+        assertTrue(message.text.contains("用其他应用打开"))
+        assertFalse(fixture.viewModel.uiState.value.busy)
+    }
+
+    @Test
+    fun missingPickerShowsOpenWithAlternativeInsteadOfCrashing() {
+        val fixture = fixture()
+
+        fixture.viewModel.onImportPickerUnavailable()
+
+        val message = requireNotNull(fixture.viewModel.uiState.value.message)
+        assertEquals(VaultTransferMessageKind.Error, message.kind)
+        assertTrue(message.text.contains("用其他应用打开"))
+    }
+
+    @Test
+    fun successfulImportSharingAndSavingRecordTheLastSyncTime() {
+        val history = InMemoryBackupHistoryStore()
+        var now = 1_000L
+        val fixture = fixture(readBytes = encodedSyncFile(), history = history, clock = { now })
+        assertNull(fixture.viewModel.uiState.value.lastSyncAtEpochMillis)
+
+        fixture.viewModel.onImportUriSelected(TEST_URI)
+        authorize(fixture.viewModel, AuthenticationAction.ImportVault)
+        assertEquals(1_000L, history.lastSyncAtEpochMillis())
+        assertEquals(1_000L, fixture.viewModel.uiState.value.lastSyncAtEpochMillis)
+
+        now = 2_000L
+        fixture.viewModel.requestExport()
+        authorize(fixture.viewModel, AuthenticationAction.ExportVault)
+        assertEquals(1_000L, history.lastSyncAtEpochMillis())
+        fixture.viewModel.onPreparedExportShared()
+        assertEquals(2_000L, history.lastSyncAtEpochMillis())
+
+        now = 3_000L
+        fixture.viewModel.savePreparedExport("content://downloads/document/7")
+        assertEquals(3_000L, fixture.viewModel.uiState.value.lastSyncAtEpochMillis)
+    }
+
+    @Test
+    fun failedImportDoesNotCountAsBackup() {
+        val history = InMemoryBackupHistoryStore()
+        val fixture = fixture(readBytes = byteArrayOf(1, 2, 3), history = history)
+
+        fixture.viewModel.onImportUriSelected(TEST_URI)
+
+        assertNull(history.lastSyncAtEpochMillis())
+        fixture.viewModel.onPreparedExportShared()
+        assertNull(history.lastSyncAtEpochMillis())
+    }
+
+    @Test
+    fun snoozingTheReminderIsPersistedAndClearedByTheNextSync() {
+        val history = InMemoryBackupHistoryStore()
+        var now = 10_000L
+        val fixture = fixture(readBytes = encodedSyncFile(), history = history, clock = { now })
+
+        fixture.viewModel.snoozeBackupReminder()
+        val expected = 10_000L + java.util.concurrent.TimeUnit.DAYS.toMillis(7)
+        assertEquals(expected, history.reminderSnoozedUntilEpochMillis())
+        assertEquals(expected, fixture.viewModel.uiState.value.backupReminderSnoozedUntilEpochMillis)
+
+        now = 20_000L
+        fixture.viewModel.onImportUriSelected(TEST_URI)
+        authorize(fixture.viewModel, AuthenticationAction.ImportVault)
+        assertNull(history.reminderSnoozedUntilEpochMillis())
+        assertNull(fixture.viewModel.uiState.value.backupReminderSnoozedUntilEpochMillis)
+    }
+
+    @Test
+    fun pairingCodeIsExtractedFromPastedChatText() {
+        val fixture = fixture(readBytes = encodedPairingFile())
+        fixture.viewModel.onImportUriSelected(TEST_URI)
+
+        fixture.viewModel.pastePairingCode("配对码：cvp1-aaaqe ayeau-daoca-jbifq-ydiob4 请勿转发")
+
+        assertEquals("CVP1-AAAQE-AYEAU-DAOCA-JBIFQ-YDIOB4", fixture.viewModel.uiState.value.pairingCodeInput)
+        assertEquals(VaultTransferMessageKind.Information, fixture.viewModel.uiState.value.message?.kind)
+    }
+
+    @Test
+    fun pastingWithoutAPairingCodeExplainsWhatToCopy() {
+        val fixture = fixture(readBytes = encodedPairingFile())
+        fixture.viewModel.onImportUriSelected(TEST_URI)
+
+        fixture.viewModel.pastePairingCode("hello")
+
+        assertTrue(fixture.viewModel.uiState.value.pairingCodeInput.isEmpty())
+        assertEquals(VaultTransferMessageKind.Error, fixture.viewModel.uiState.value.message?.kind)
+        assertTrue(fixture.viewModel.uiState.value.importNeedsPairingCode)
+    }
+
+    @Test
+    fun inboundImportIsDeferredWhileAnotherTransferStepIsPending() {
+        val fixture = fixture(readBytes = encodedSyncFile())
+        fixture.viewModel.requestExport()
+        assertEquals(AuthenticationAction.ExportVault, fixture.viewModel.pendingAuthenticationAction())
+
+        assertFalse(fixture.viewModel.acceptInboundImport(TEST_URI))
+        assertEquals(0, fixture.files.readCount)
+
+        fixture.viewModel.onAuthenticationFailed()
+        assertTrue(fixture.viewModel.acceptInboundImport(TEST_URI))
+        assertEquals(1, fixture.files.readCount)
+        assertEquals(AuthenticationAction.ImportVault, fixture.viewModel.pendingAuthenticationAction())
+    }
+
     private fun authorize(viewModel: VaultTransferViewModel, action: AuthenticationAction) {
         val request = requireNotNull(viewModel.uiState.value.authenticationRequest)
         assertEquals(action, viewModel.consumeAuthenticationRequest(request.requestId))
@@ -302,6 +473,8 @@ class VaultTransferViewModelTest {
     private fun fixture(
         paired: Boolean = false,
         readBytes: ByteArray = encodedSyncFile(),
+        history: BackupHistoryStore = InMemoryBackupHistoryStore(),
+        clock: () -> Long = { 1L },
     ): Fixture {
         val operations = FakeOperations(paired)
         val files = FakeFiles(readBytes)
@@ -309,6 +482,8 @@ class VaultTransferViewModelTest {
             operations = operations,
             files = files,
             externalScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            backupHistory = history,
+            clock = clock,
         )
         return Fixture(viewModel, operations, files)
     }
@@ -437,6 +612,10 @@ private class FakeFiles(
 ) : VaultTransferFiles {
     var publishedBytes: ByteArray? = null
     var failShareIntent: Boolean = false
+    var readFailure: Exception? = null
+    var readCount = 0
+    var saveFailure: Exception? = null
+    var savedDestination: String? = null
 
     override suspend fun publish(
         fileName: String,
@@ -446,11 +625,20 @@ private class FakeFiles(
         return FakePublishedVaultTransferFile(fileName)
     }
 
-    override suspend fun read(uri: String): ByteArray = readBytes
+    override suspend fun read(uri: String): ByteArray {
+        readCount += 1
+        readFailure?.let { throw it }
+        return readBytes
+    }
 
     override fun shareIntent(file: PublishedVaultTransferFile): Intent {
         if (failShareIntent) throw IOException("Synthetic share failure")
         throw AssertionError("Share intent is outside this ViewModel unit test.")
+    }
+
+    override suspend fun save(file: PublishedVaultTransferFile, destinationUri: String) {
+        saveFailure?.let { throw it }
+        savedDestination = destinationUri
     }
 
     private data class FakePublishedVaultTransferFile(

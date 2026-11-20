@@ -22,6 +22,28 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!--
+                Encrypted .cvpair / .cvsync transfer files have no registered MIME type, so
+                WeChat, QQ and file managers label them generically. Accept "Open with" (VIEW)
+                and "Share" (SEND) for content:// URIs; MainActivity only forwards them to the
+                in-app import flow, which still requires the pairing code and system
+                authentication before anything is written.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:scheme="content" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <provider
